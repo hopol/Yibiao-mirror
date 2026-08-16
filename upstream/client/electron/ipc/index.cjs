@@ -33,6 +33,7 @@ const { createSqliteDatabase } = require('../services/sqliteDatabase.cjs');
 const { createSystemFontService } = require('../services/systemFontService.cjs');
 const { clearOrphanedGeneratedImages, clearStalePiTaskArchives, runHistoricalStorageCleanup } = require('../services/storageCleanupService.cjs');
 const { createTaskService } = require('../services/taskService.cjs');
+const { createAgentWorkspaceService } = require('../services/agentWorkspaceService.cjs');
 const { createTaskLogStore } = require('../services/taskLogStore.cjs');
 const { createTechnicalPlanStore } = require('../services/technicalPlanStore.cjs');
 const { createTemplateStore } = require('../services/templateStore.cjs');
@@ -69,6 +70,7 @@ function sendToWebContents(webContents, channel, payload) {
 const workspaceDatabaseChannels = [
   'technical-plan:load-state',
   'technical-plan:import-tender-document',
+  'technical-plan:remove-tender-document',
   'technical-plan:import-original-plan-document',
   'technical-plan:check-bid-sections',
   'technical-plan:select-bid-section',
@@ -193,19 +195,22 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   const templateStore = createTemplateStore({ db: sqliteDatabase.db });
   const duplicateCheckService = createDuplicateCheckService({ app, configStore, workspaceStore: duplicateCheckStore });
   const taskService = createTaskService({ aiService, agentService, autoConfirmationService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, knowledgeBaseService, duplicateCheckService });
+  const agentWorkspaceService = createAgentWorkspaceService({ agentService, taskService, technicalPlanStore });
 
   clearWorkspaceDatabaseIpc();
   registerKnowledgeBaseIpc({ knowledgeBaseService });
   registerTechnicalPlanIpc({ technicalPlanStore, taskService });
   registerDuplicateCheckIpc({ duplicateCheckStore });
-  registerRejectionCheckIpc({ rejectionCheckStore });
+  registerRejectionCheckIpc({ rejectionCheckStore, taskService });
   registerTemplateIpc({ templateStore });
   registerTaskIpc({ taskService });
   updateStatus({ phase: 'ready', ready: true, message: '本地数据库已就绪' });
   
   // 更新 pluginService 的服务引用
   pluginService.updateServices({
+    agentService,
     taskService,
+    agentWorkspaceService,
     technicalPlanStore,
     duplicateCheckStore,
     rejectionCheckStore,
@@ -325,6 +330,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   registerExportIpc({ exportService });
   registerSystemFontIpc({ systemFontService });
   registerPluginIpc(ipcMain, app, {
+    agentService,
     taskService: null,
     technicalPlanStore: null,
     duplicateCheckStore: null,
