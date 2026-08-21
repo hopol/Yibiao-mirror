@@ -45,6 +45,9 @@ const bridge = {
       return () => ipcRenderer.removeListener('workspace-database:status', listener);
     },
   },
+  ui: {
+    setCurrentView: (view) => ipcRenderer.invoke('ui:set-current-view', view),
+  },
   config: {
     load: () => ipcRenderer.invoke('config:load'),
     save: (config) => ipcRenderer.invoke('config:save', config),
@@ -166,10 +169,26 @@ const bridge = {
     saveOutlineConfig: (payload) => ipcRenderer.invoke('technical-plan:save-outline-config', payload),
     saveOutlineSelection: (payload) => ipcRenderer.invoke('tasks:confirm-outline-selection', payload),
     saveOutline: (outlineData) => ipcRenderer.invoke('technical-plan:save-outline', outlineData),
+    saveGlobalFactsConfig: (payload) => ipcRenderer.invoke('technical-plan:save-global-facts-config', payload),
     saveGlobalFacts: (globalFacts) => ipcRenderer.invoke('technical-plan:save-global-facts', globalFacts),
     saveContentGenerationOptions: (options) => ipcRenderer.invoke('technical-plan:save-content-generation-options', options),
     saveChapterContent: (payload) => ipcRenderer.invoke('technical-plan:save-chapter-content', payload),
     clear: () => ipcRenderer.invoke('technical-plan:clear'),
+  },
+  feasibilityReport: {
+    loadState: () => ipcRenderer.invoke('feasibility-report:load-state'),
+    importSourceDocuments: (filePaths) => ipcRenderer.invoke('feasibility-report:import-source-documents', filePaths),
+    removeSourceDocument: (sourceId) => ipcRenderer.invoke('feasibility-report:remove-source-document', sourceId),
+    readSourceMarkdown: (sourceId) => ipcRenderer.invoke('feasibility-report:read-source-markdown', sourceId),
+    readCombinedSourceMarkdown: () => ipcRenderer.invoke('feasibility-report:read-combined-source-markdown'),
+    updateStep: (step) => ipcRenderer.invoke('feasibility-report:update-step', step),
+    saveProjectInfo: (projectInfo) => ipcRenderer.invoke('feasibility-report:save-project-info', projectInfo),
+    saveAnalysis: (markdown) => ipcRenderer.invoke('feasibility-report:save-analysis', markdown),
+    saveOutlineConfig: (payload) => ipcRenderer.invoke('feasibility-report:save-outline-config', payload),
+    saveOutline: (payload) => ipcRenderer.invoke('feasibility-report:save-outline', payload),
+    saveKeyParameters: (markdown) => ipcRenderer.invoke('feasibility-report:save-key-parameters', markdown),
+    saveChapterContent: (payload) => ipcRenderer.invoke('feasibility-report:save-chapter-content', payload),
+    clear: () => ipcRenderer.invoke('feasibility-report:clear'),
   },
   duplicateCheck: {
     loadState: () => ipcRenderer.invoke('duplicate-check:load-state'),
@@ -205,6 +224,12 @@ const bridge = {
     startRejectionItemsExtraction: (payload) => ipcRenderer.invoke('tasks:start-rejection-items-extraction', payload),
     startRejectionCheck: (payload) => ipcRenderer.invoke('tasks:start-rejection-check', payload),
     startDuplicateAnalysis: (payload) => ipcRenderer.invoke('tasks:start-duplicate-analysis', payload),
+    startFeasibilityAnalysis: (payload) => ipcRenderer.invoke('tasks:start-feasibility-analysis', payload),
+    startFeasibilityOutline: (payload) => ipcRenderer.invoke('tasks:start-feasibility-outline', payload),
+    startFeasibilityParameters: (payload) => ipcRenderer.invoke('tasks:start-feasibility-parameters', payload),
+    startFeasibilityContent: (payload) => ipcRenderer.invoke('tasks:start-feasibility-content', payload),
+    pauseFeasibilityContent: () => ipcRenderer.invoke('tasks:pause-feasibility-content'),
+    startFeasibilityHumanWriting: (payload) => ipcRenderer.invoke('tasks:start-feasibility-human-writing', payload),
     getActiveTasks: () => ipcRenderer.invoke('tasks:get-active'),
     onTaskEvent: (callback) => {
       ipcRenderer.send('tasks:subscribe');

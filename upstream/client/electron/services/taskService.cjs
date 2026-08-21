@@ -2,12 +2,24 @@ const crypto = require('node:crypto');
 const { runBidSectionExtractionTask } = require('./bidSectionExtractionTask.cjs');
 const { runBidAnalysisTask } = require('./bidAnalysisTask.cjs');
 const { runContentGenerationTask } = require('./contentGenerationTask.cjs');
-const { runGlobalFactsTask } = require('./globalFactsTask.cjs');
+const { runGlobalFactsTaskV2 } = require('./globalFactsTaskV2.cjs');
 const { runOutlineGenerationTaskV2 } = require('./outlineGenerationTaskV2.cjs');
 const { runOutlineAdjustmentTask } = require('./outlineAdjustmentTask.cjs');
+const { runGlobalFactsAdjustmentTask } = require('./globalFactsAdjustmentTask.cjs');
 const { OUTLINE_AGENT_TASK_KEY } = require('./outlineGenerationAgentV2Config.cjs');
+const { GLOBAL_FACTS_AGENT_TASK_KEY } = require('./globalFactsAgentV2Config.cjs');
+const { FEASIBILITY_OUTLINE_AGENT_TASK_KEY } = require('./feasibilityOutlineAgentConfig.cjs');
 const { runRejectionCheckTask, runRejectionItemsExtractionTask } = require('./rejectionCheckTask.cjs');
 const { originalPlanDownstreamTaskTypes } = require('./technicalPlanStore.cjs');
+const {
+  clearContent,
+  runFeasibilityAnalysisTask,
+  runFeasibilityParametersTask,
+  runFeasibilityContentTask,
+  runFeasibilityHumanWritingTask,
+} = require('./feasibilityReportTasks.cjs');
+const { runFeasibilityOutlineTask } = require('./feasibilityOutlineTask.cjs');
+const { runFeasibilityOutlineAdjustmentTask } = require('./feasibilityOutlineAdjustmentTask.cjs');
 const { normalizeLogs } = require('./taskLogStore.cjs');
 
 const taskDefinitions = {
@@ -56,6 +68,15 @@ const taskDefinitions = {
     stateKey: 'technicalPlan',
     field: 'globalFactsTask',
   },
+  'global-facts-adjustment': {
+    label: '全局事实AI调整',
+    group: 'technical-plan',
+    groupLabel: '技术方案',
+    step: 4,
+    lockPolicy: 'group-exclusive',
+    stateKey: 'technicalPlan',
+    field: 'globalFactsAdjustmentTask',
+  },
   'content-generation': {
     label: '正文生成',
     group: 'technical-plan',
@@ -91,6 +112,60 @@ const taskDefinitions = {
     lockPolicy: 'group-exclusive',
     stateKey: 'duplicateCheck',
     field: 'analysisTask',
+  },
+  'feasibility-analysis': {
+    label: '可研项目资料分析',
+    group: 'feasibility-report',
+    groupLabel: '可行性研究报告',
+    step: 2,
+    lockPolicy: 'group-exclusive',
+    stateKey: 'feasibilityReport',
+    field: 'analysisTask',
+  },
+  'feasibility-outline': {
+    label: '可研报告目录生成',
+    group: 'feasibility-report',
+    groupLabel: '可行性研究报告',
+    step: 3,
+    lockPolicy: 'group-exclusive',
+    stateKey: 'feasibilityReport',
+    field: 'outlineTask',
+  },
+  'feasibility-outline-adjustment': {
+    label: '可研报告目录AI调整',
+    group: 'feasibility-report',
+    groupLabel: '可行性研究报告',
+    step: 3,
+    lockPolicy: 'group-exclusive',
+    stateKey: 'feasibilityReport',
+    field: 'outlineAdjustmentTask',
+  },
+  'feasibility-parameters': {
+    label: '可研关键参数生成',
+    group: 'feasibility-report',
+    groupLabel: '可行性研究报告',
+    step: 4,
+    lockPolicy: 'group-exclusive',
+    stateKey: 'feasibilityReport',
+    field: 'parametersTask',
+  },
+  'feasibility-content': {
+    label: '可研报告正文生成',
+    group: 'feasibility-report',
+    groupLabel: '可行性研究报告',
+    step: 5,
+    lockPolicy: 'group-exclusive',
+    stateKey: 'feasibilityReport',
+    field: 'contentTask',
+  },
+  'feasibility-human-writing': {
+    label: '可研自然化审校',
+    group: 'feasibility-report',
+    groupLabel: '可行性研究报告',
+    step: 5,
+    lockPolicy: 'group-exclusive',
+    stateKey: 'feasibilityReport',
+    field: 'humanWritingTask',
   },
 };
 
@@ -236,7 +311,7 @@ function createTask(type, payload) {
   };
 }
 
-function createTaskService({ aiService, agentService, autoConfirmationService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, knowledgeBaseService, duplicateCheckService }) {
+function createTaskService({ aiService, agentService, autoConfirmationService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, feasibilityReportStore, knowledgeBaseService, duplicateCheckService }) {
   const subscribers = new Set();
   const callbackSubscribers = new Set();
   const activeTasks = new Map();
@@ -269,6 +344,7 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
           'outlineWordControlSnapshot',
           'outlineGenerationTask',
           'globalFactsTask',
+          'globalFactsAdjustmentTask',
           'globalFacts',
           'contentGenerationTask',
           'contentGenerationOptions',
@@ -297,6 +373,7 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
         'outlineGenerationTask',
         'referenceKnowledgeDocumentIds',
         'globalFactsTask',
+        'globalFactsAdjustmentTask',
         'globalFacts',
         'contentGenerationTask',
         'contentGenerationOptions',
@@ -315,12 +392,14 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
         'outlineWordControlSnapshot',
         'referenceKnowledgeDocumentIds',
         'globalFactsTask',
+        'globalFactsAdjustmentTask',
         'globalFacts',
       ]);
       if (task.status === 'success' || state.outlineData === null || hasOwn(eventPatch, 'outlineData')) {
         copyPatchFields(patch, state, [
           'outlineData',
           'globalFactsTask',
+          'globalFactsAdjustmentTask',
           'globalFacts',
           'contentGenerationTask',
           'contentGenerationSections',
@@ -332,6 +411,17 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
     }
 
     if (task.type === 'global-facts-generation') {
+      copyPatchFields(patch, state, ['globalFacts', 'globalFactsAdjustmentTask']);
+      copyPatchFields(patch, state, [
+        'contentGenerationTask',
+        'contentGenerationSections',
+        'contentGenerationPlans',
+        'contentIllustrationPlan',
+        'contentGenerationRuntime',
+      ]);
+    }
+
+    if (task.type === 'global-facts-adjustment') {
       copyPatchFields(patch, state, ['globalFacts']);
       copyPatchFields(patch, state, [
         'contentGenerationTask',
@@ -371,6 +461,32 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
     return event;
   }
 
+  function buildFeasibilityReportSnapshot(task, state = {}) {
+    const patch = {};
+    const taskField = getTaskField(task.type);
+    if (taskField) {
+      patch[taskField] = state?.[taskField] || task;
+    }
+    copyPatchFields(patch, state, [
+      'step',
+      'projectInfo',
+      'sourceFiles',
+      'analysisMarkdown',
+      'outlineTemplate',
+      'targetWords',
+      'referenceDocumentIds',
+      'keyParametersMarkdown',
+      'outlineData',
+      'analysisTask',
+      'outlineTask',
+      'outlineAdjustmentTask',
+      'parametersTask',
+      'contentTask',
+      'humanWritingTask',
+    ]);
+    return { feasibilityReportPatch: patch };
+  }
+
   function buildSnapshot(definition, state, task, eventPatch) {
     if (definition.stateKey === 'technicalPlan') {
       return buildTechnicalPlanSnapshot(task, state, eventPatch);
@@ -380,6 +496,9 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
     }
     if (definition.stateKey === 'duplicateCheck') {
       return { duplicateCheckPatch: state };
+    }
+    if (definition.stateKey === 'feasibilityReport') {
+      return buildFeasibilityReportSnapshot(task, state, eventPatch);
     }
     return {};
   }
@@ -394,6 +513,9 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
     }
     if (definition.stateKey === 'duplicateCheck') {
       return { duplicateCheck: duplicateCheckStore.loadDuplicateCheck() };
+    }
+    if (definition.stateKey === 'feasibilityReport') {
+      return buildSnapshot(definition, feasibilityReportStore.loadFeasibilityReport(), task);
     }
     return {};
   }
@@ -466,6 +588,15 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
           throw new Error('正文生成已暂停，请先继续当前正文生成任务或重置技术方案后再启动新的任务。');
         }
       }
+      if (definition.group === 'feasibility-report' && feasibilityReportStore) {
+        const report = feasibilityReportStore.loadFeasibilityReport() || {};
+        if (report.contentTask?.status === 'paused') {
+          if (type === 'feasibility-content' && (payload?.resume || payload?.onlyMissing)) {
+            return;
+          }
+          throw new Error('可研正文生成已暂停，请先继续当前正文生成或重置可研后再启动新的任务。');
+        }
+      }
       return;
     }
 
@@ -486,6 +617,10 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
       duplicateCheckStore.updateDuplicateCheckWithoutReload(partial);
       return;
     }
+    if (definition.stateKey === 'feasibilityReport') {
+      feasibilityReportStore.updateFeasibilityReportWithoutReload(partial);
+      return;
+    }
     technicalPlanStore.updateTechnicalPlanWithoutReload(partial);
   }
 
@@ -498,6 +633,9 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
     }
     if (definition.stateKey === 'duplicateCheck') {
       return duplicateCheckStore.loadDuplicateCheck();
+    }
+    if (definition.stateKey === 'feasibilityReport') {
+      return feasibilityReportStore.loadFeasibilityReport();
     }
     return technicalPlanStore.loadTechnicalPlan();
   }
@@ -728,7 +866,9 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
       ? technicalPlanStore
       : definition.stateKey === 'rejectionCheck'
         ? rejectionCheckStore
-        : duplicateCheckStore;
+        : definition.stateKey === 'feasibilityReport'
+          ? feasibilityReportStore
+          : duplicateCheckStore;
     const runnerAiService = aiService?.withQueueScope ? aiService.withQueueScope(queueScopeId, taskControl.signal) : aiService;
     const runnerAgentService = agentService.bindTaskContext(
       () => createAgentUserTaskContext(type, definition, payload, currentTask),
@@ -774,6 +914,20 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
       const definition = getTaskDefinition(type);
       const control = activeTaskControls.get(type);
       if (definition.group !== 'rejection-check' || !isActiveTaskStatus(task.status) || !control?.cancel) continue;
+      if (typeFilter && !typeFilter.has(type)) continue;
+      controls.push(control);
+      control.cancel(reason);
+    }
+    await Promise.all(controls.map((control) => control.waitForSettlement()));
+  }
+
+  async function cancelFeasibilityReportTasks(reason, taskTypes) {
+    const typeFilter = Array.isArray(taskTypes) && taskTypes.length ? new Set(taskTypes) : null;
+    const controls = [];
+    for (const [type, task] of activeTasks.entries()) {
+      const definition = getTaskDefinition(type);
+      const control = activeTaskControls.get(type);
+      if (definition.group !== 'feasibility-report' || !isActiveTaskStatus(task.status) || !control?.cancel) continue;
       if (typeFilter && !typeFilter.has(type)) continue;
       controls.push(control);
       control.cancel(reason);
@@ -923,6 +1077,31 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
     const partial = { outlineAdjustmentTask: recoveredTask };
     technicalPlanStore.updateTechnicalPlanWithoutReload(partial);
     emit(recoveredTask, buildSnapshot(getTaskDefinition('outline-adjustment'), partial, recoveredTask));
+  }
+
+  function recoverInterruptedGlobalFactsAdjustmentTask(technicalPlan) {
+    if (activeTasks.has('global-facts-adjustment')) {
+      return;
+    }
+
+    const adjustmentTask = technicalPlan.globalFactsAdjustmentTask;
+    if (!isActiveTaskStatus(adjustmentTask?.status)) {
+      return;
+    }
+
+    const message = '上次全局事实 AI 调整未完成，请重新发送调整要求。';
+    const recoveredTask = {
+      ...adjustmentTask,
+      status: 'error',
+      progress: Math.max(0, Math.min(99, Number(adjustmentTask.progress || 0) || 0)),
+      pause_requested: false,
+      error: message,
+      logs: [...(Array.isArray(adjustmentTask.logs) ? adjustmentTask.logs : []), message],
+      updated_at: now(),
+    };
+    const partial = { globalFactsAdjustmentTask: recoveredTask };
+    technicalPlanStore.updateTechnicalPlanWithoutReload(partial);
+    emit(recoveredTask, buildSnapshot(getTaskDefinition('global-facts-adjustment'), partial, recoveredTask));
   }
 
   function recoverInterruptedBidAnalysisTask(technicalPlan) {
@@ -1088,17 +1267,71 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
     emit(recoveredTask, { duplicateCheckPatch: partial });
   }
 
+  function recoverInterruptedFeasibilityTasks(state) {
+    if (!feasibilityReportStore) return;
+    const markError = (task, message) => {
+      if (!isActiveTaskStatus(task?.status)) return undefined;
+      return {
+        ...task,
+        status: 'error',
+        progress: 100,
+        error: message,
+        logs: [...(Array.isArray(task.logs) ? task.logs : []), message],
+        updated_at: now(),
+      };
+    };
+    const interruptMessage = '上次任务因应用关闭而中断，请重新开始。';
+    const pausedMessage = '上次正文生成因应用关闭而暂停，可点击继续恢复。';
+    const partial = {};
+    const analysisTask = markError(state.analysisTask, interruptMessage);
+    const outlineTask = markError(state.outlineTask, interruptMessage);
+    const parametersTask = markError(state.parametersTask, interruptMessage);
+    const humanWritingTask = markError(state.humanWritingTask, interruptMessage);
+    if (analysisTask) partial.analysisTask = analysisTask;
+    if (outlineTask) partial.outlineTask = outlineTask;
+    if (parametersTask) partial.parametersTask = parametersTask;
+    if (humanWritingTask) partial.humanWritingTask = humanWritingTask;
+    if (isActiveTaskStatus(state.outlineAdjustmentTask?.status)) {
+      const message = '上次目录 AI 调整未完成，请重新发送调整要求。';
+      partial.outlineAdjustmentTask = {
+        ...state.outlineAdjustmentTask,
+        status: 'error',
+        progress: Math.max(0, Math.min(99, Number(state.outlineAdjustmentTask.progress || 0) || 0)),
+        pause_requested: false,
+        error: message,
+        logs: [...(Array.isArray(state.outlineAdjustmentTask.logs) ? state.outlineAdjustmentTask.logs : []), message],
+        updated_at: now(),
+      };
+    }
+    if (isActiveTaskStatus(state.contentTask?.status)) {
+      partial.contentTask = {
+        ...state.contentTask,
+        status: 'paused',
+        pause_requested: false,
+        logs: [...(Array.isArray(state.contentTask.logs) ? state.contentTask.logs : []), pausedMessage],
+        updated_at: now(),
+      };
+    }
+    if (!Object.keys(partial).length) return;
+    feasibilityReportStore.updateFeasibilityReportWithoutReload(partial);
+    const recovered = partial.contentTask || analysisTask || outlineTask || partial.outlineAdjustmentTask || parametersTask || humanWritingTask;
+    if (recovered) emit(recovered, { feasibilityReportPatch: partial });
+  }
+
   const technicalPlanRecoveryState = technicalPlanStore.loadTechnicalPlan() || {};
   const rejectionCheckRecoveryState = rejectionCheckStore.loadRejectionCheck() || {};
   const duplicateCheckRecoveryState = duplicateCheckStore.loadDuplicateCheck() || {};
+  const feasibilityReportRecoveryState = feasibilityReportStore?.loadFeasibilityReport?.() || {};
   recoverInterruptedBidSectionExtractionTask(technicalPlanRecoveryState);
   recoverInterruptedBidAnalysisTask(technicalPlanRecoveryState);
   recoverInterruptedOutlineGenerationTask(technicalPlanRecoveryState);
   recoverInterruptedOutlineAdjustmentTask(technicalPlanRecoveryState);
   recoverInterruptedContentGenerationTask(technicalPlanRecoveryState);
   recoverInterruptedGlobalFactsTask(technicalPlanRecoveryState);
+  recoverInterruptedGlobalFactsAdjustmentTask(technicalPlanRecoveryState);
   recoverInterruptedRejectionCheckTasks(rejectionCheckRecoveryState);
   recoverInterruptedDuplicateCheckTask(duplicateCheckRecoveryState);
+  recoverInterruptedFeasibilityTasks(feasibilityReportRecoveryState);
 
   return {
     subscribe,
@@ -1120,6 +1353,7 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
         outlineAdjustmentTask: undefined,
         referenceKnowledgeDocumentIds: [],
         globalFactsTask: undefined,
+        globalFactsAdjustmentTask: undefined,
         globalFacts: [],
         contentGenerationTask: undefined,
         contentGenerationOptions: undefined,
@@ -1144,6 +1378,7 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
         outlineWordControlSnapshot: undefined,
         outlineAdjustmentTask: undefined,
         globalFactsTask: undefined,
+        globalFactsAdjustmentTask: undefined,
         globalFacts: [],
         contentGenerationTask: undefined,
         contentGenerationSections: {},
@@ -1158,15 +1393,21 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
       return startManagedTask('outline-adjustment', payload, runOutlineAdjustmentTask);
     },
     startGlobalFactsGeneration(payload) {
-      return startManagedTask('global-facts-generation', payload, runGlobalFactsTask, {
+      return startManagedTask('global-facts-generation', payload, runGlobalFactsTaskV2, {
         invalidateContentGeneration: true,
         globalFacts: [],
+        globalFactsAdjustmentTask: undefined,
         contentGenerationTask: undefined,
         contentGenerationSections: {},
         contentGenerationPlans: {},
         contentIllustrationPlan: undefined,
         contentGenerationRuntime: undefined,
+      }, {
+        beforeStart: () => agentService.deletePersistentTask(GLOBAL_FACTS_AGENT_TASK_KEY),
       });
+    },
+    startGlobalFactsAdjustment(payload) {
+      return startManagedTask('global-facts-adjustment', payload, runGlobalFactsAdjustmentTask);
     },
     startContentGeneration(payload) {
       const technicalPlan = technicalPlanStore.loadTechnicalPlan();
@@ -1193,6 +1434,24 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
 
       throw new Error('当前没有正在生成的正文任务。');
     },
+    pauseFeasibilityContent() {
+      const task = activeTasks.get('feasibility-content');
+      const control = activeTaskControls.get('feasibility-content');
+      if (task && isActiveTaskStatus(task.status) && control?.requestPause) {
+        if (control.queueScopeId && aiService?.pauseQueueScope) {
+          aiService.pauseQueueScope(control.queueScopeId);
+        }
+        return control.requestPause();
+      }
+
+      const report = feasibilityReportStore?.loadFeasibilityReport?.() || {};
+      const contentTask = report.contentTask;
+      if (contentTask?.status === 'paused' || contentTask?.status === 'pausing') {
+        return contentTask;
+      }
+
+      throw new Error('当前没有正在生成的可研正文任务。');
+    },
     startRejectionItemsExtraction(payload) {
       return startManagedTask('rejection-items-extraction', payload, runRejectionItemsExtractionTask, payload?.workspaceState || {});
     },
@@ -1204,6 +1463,59 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
         throw new Error('标书查重任务服务尚未初始化');
       }
       return startManagedTask('duplicate-analysis', payload, duplicateCheckService.runAnalysisTask);
+    },
+    startFeasibilityAnalysis(payload) {
+      return startManagedTask('feasibility-analysis', payload, runFeasibilityAnalysisTask, {
+        outlineData: null,
+        keyParametersMarkdown: '',
+        outlineTask: null,
+        outlineAdjustmentTask: null,
+        parametersTask: null,
+        contentTask: null,
+        humanWritingTask: null,
+      });
+    },
+    startFeasibilityOutline(payload) {
+      return startManagedTask('feasibility-outline', payload, runFeasibilityOutlineTask, {
+        outlineTemplate: payload?.outlineTemplate,
+        targetWords: payload?.targetWords,
+        referenceDocumentIds: payload?.referenceDocumentIds,
+        outlineData: null,
+        keyParametersMarkdown: '',
+        outlineAdjustmentTask: null,
+        parametersTask: null,
+        contentTask: null,
+        humanWritingTask: null,
+      }, {
+        beforeStart: () => agentService.deletePersistentTask(FEASIBILITY_OUTLINE_AGENT_TASK_KEY),
+      });
+    },
+    startFeasibilityOutlineAdjustment(payload) {
+      return startManagedTask('feasibility-outline-adjustment', payload, runFeasibilityOutlineAdjustmentTask);
+    },
+    startFeasibilityParameters(payload) {
+      return startManagedTask('feasibility-parameters', payload, runFeasibilityParametersTask, {
+        contentTask: null,
+        humanWritingTask: null,
+      });
+    },
+    startFeasibilityContent(payload) {
+      const incremental = Boolean(payload?.onlyMissing || payload?.resume);
+      if (incremental) {
+        return startManagedTask('feasibility-content', payload, runFeasibilityContentTask, {});
+      }
+      const report = feasibilityReportStore?.loadFeasibilityReport?.() || {};
+      const initialPartial = { humanWritingTask: null };
+      if (report.outlineData?.outline?.length) {
+        initialPartial.outlineData = {
+          ...report.outlineData,
+          outline: clearContent(report.outlineData.outline),
+        };
+      }
+      return startManagedTask('feasibility-content', payload, runFeasibilityContentTask, initialPartial);
+    },
+    startFeasibilityHumanWriting(payload) {
+      return startManagedTask('feasibility-human-writing', payload, runFeasibilityHumanWritingTask);
     },
     confirmOutlineSelection(payload) {
       const control = activeTaskControls.get('outline-generation');
@@ -1260,6 +1572,36 @@ function createTaskService({ aiService, agentService, autoConfirmationService, t
           documentRole === 'bid' ? ['rejection-check-run'] : undefined,
         ),
       });
+    },
+    async resetFeasibilityReport() {
+      await cancelFeasibilityReportTasks('可研报告已重置，后台任务已取消');
+      return feasibilityReportStore.clearFeasibilityReport();
+    },
+    importFeasibilitySourceDocuments(filePaths) {
+      return feasibilityReportStore.importSourceDocuments(filePaths, {
+        beforeCommit: () => cancelFeasibilityReportTasks('可研资料已更新，后台任务已取消'),
+      });
+    },
+    removeFeasibilitySourceDocument(sourceId) {
+      return feasibilityReportStore.removeSourceDocument(sourceId, {
+        beforeCommit: () => cancelFeasibilityReportTasks('可研资料已更新，后台任务已取消'),
+      });
+    },
+    async saveFeasibilityProjectInfo(projectInfo) {
+      await cancelFeasibilityReportTasks('项目信息已更新，后台任务已取消');
+      return feasibilityReportStore.saveProjectInfo(projectInfo, { clearDownstream: true });
+    },
+    async saveFeasibilityAnalysis(markdown) {
+      await cancelFeasibilityReportTasks('资料分析已更新，后台任务已取消');
+      return feasibilityReportStore.saveAnalysis(markdown);
+    },
+    async saveFeasibilityOutline(payload) {
+      await cancelFeasibilityReportTasks('报告目录已更新，后台任务已取消');
+      return feasibilityReportStore.saveOutline(payload);
+    },
+    async saveFeasibilityKeyParameters(markdown) {
+      await cancelFeasibilityReportTasks('关键参数已更新，后台任务已取消');
+      return feasibilityReportStore.saveKeyParameters(markdown);
     },
     getActiveTasks() {
       return Array.from(activeTasks.values());

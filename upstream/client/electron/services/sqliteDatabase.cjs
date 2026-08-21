@@ -3,7 +3,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { getWorkspaceDatabasePath } = require('../utils/paths.cjs');
 
-const schemaVersion = 21;
+const schemaVersion = 23;
 
 function createInitialSchema(db) {
   db.exec(`
@@ -41,6 +41,7 @@ function createInitialSchema(db) {
       bid_section_extraction_error TEXT,
       outline_mode TEXT NOT NULL DEFAULT 'aligned',
       outline_expansion_mode TEXT NOT NULL DEFAULT 'ai-complement',
+      global_facts_mode TEXT NOT NULL DEFAULT 'fabricate',
       outline_word_control_options_json TEXT,
       outline_word_control_snapshot_json TEXT,
       outline_project_name TEXT,
@@ -224,6 +225,10 @@ function addTechnicalPlanBidAnalysisSelection(db) {
 
 function addTechnicalPlanOutlineExpansionMode(db) {
   addColumnIfMissing(db, 'technical_plan_meta', 'outline_expansion_mode', "TEXT NOT NULL DEFAULT 'ai-complement'");
+}
+
+function addTechnicalPlanGlobalFactsMode(db) {
+  addColumnIfMissing(db, 'technical_plan_meta', 'global_facts_mode', "TEXT NOT NULL DEFAULT 'fabricate'");
 }
 
 function addTechnicalPlanBidSectionOptimization(db) {
@@ -978,6 +983,58 @@ function createExportTemplatesSchema(db) {
   `);
 }
 
+function createFeasibilityReportSchema(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS feasibility_report_meta (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      step TEXT NOT NULL DEFAULT 'materials',
+      project_info_json TEXT,
+      source_files_json TEXT,
+      analysis_markdown TEXT,
+      outline_template TEXT NOT NULL DEFAULT 'government',
+      target_words INTEGER NOT NULL DEFAULT 30000,
+      reference_document_ids_json TEXT,
+      key_parameters_markdown TEXT,
+      outline_project_name TEXT,
+      outline_project_overview TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS feasibility_report_tasks (
+      type TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      progress INTEGER NOT NULL DEFAULT 0,
+      stats_json TEXT,
+      error TEXT,
+      pause_requested INTEGER NOT NULL DEFAULT 0,
+      started_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS feasibility_report_outline_nodes (
+      node_id TEXT PRIMARY KEY,
+      parent_node_id TEXT,
+      sort_order INTEGER NOT NULL,
+      level INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      knowledge_item_ids_json TEXT,
+      content TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (parent_node_id) REFERENCES feasibility_report_outline_nodes(node_id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_feasibility_report_outline_parent_order
+    ON feasibility_report_outline_nodes(parent_node_id, sort_order);
+
+    CREATE INDEX IF NOT EXISTS idx_feasibility_report_outline_level
+    ON feasibility_report_outline_nodes(level);
+  `);
+}
+
 const schemaHealthTableGroups = [
   {
     version: 1,
@@ -1056,6 +1113,11 @@ const schemaHealthTableGroups = [
     version: 20,
     tables: ['task_logs', 'technical_plan_illustration_plans', 'technical_plan_illustration_items'],
     repair: createTaskLogsAndIllustrationItemsSchema,
+  },
+  {
+    version: 23,
+    tables: ['feasibility_report_meta', 'feasibility_report_tasks', 'feasibility_report_outline_nodes'],
+    repair: createFeasibilityReportSchema,
   },
 ];
 
@@ -1174,6 +1236,13 @@ const schemaHealthColumnGroups = [
     table: 'technical_plan_meta',
     columns: {
       outline_expansion_mode: "TEXT NOT NULL DEFAULT 'ai-complement'",
+    },
+  },
+  {
+    version: 22,
+    table: 'technical_plan_meta',
+    columns: {
+      global_facts_mode: "TEXT NOT NULL DEFAULT 'fabricate'",
     },
   },
   {
@@ -1380,6 +1449,16 @@ const migrations = [
     version: 21,
     description: '移除废弃的知识库旧数据迁移状态',
     up: removeKnowledgeMigrationMeta,
+  },
+  {
+    version: 22,
+    description: '技术方案新增全局事实补全模式',
+    up: addTechnicalPlanGlobalFactsMode,
+  },
+  {
+    version: 23,
+    description: '新增可行性研究报告工作区表结构',
+    up: createFeasibilityReportSchema,
   },
 ];
 

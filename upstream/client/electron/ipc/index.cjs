@@ -12,6 +12,7 @@ const { registerLicenseIpc } = require('./licenseIpc.cjs');
 const { registerRejectionCheckIpc } = require('./rejectionCheckIpc.cjs');
 const { registerTaskIpc } = require('./taskIpc.cjs');
 const { registerTechnicalPlanIpc } = require('./technicalPlanIpc.cjs');
+const { registerFeasibilityReportIpc } = require('./feasibilityReportIpc.cjs');
 const { registerTemplateIpc } = require('./templateIpc.cjs');
 const { registerSystemFontIpc } = require('./systemFontIpc.cjs');
 const { registerPluginIpc } = require('./pluginIpc.cjs');
@@ -36,9 +37,49 @@ const { createTaskService } = require('../services/taskService.cjs');
 const { createAgentWorkspaceService } = require('../services/agentWorkspaceService.cjs');
 const { createTaskLogStore } = require('../services/taskLogStore.cjs');
 const { createTechnicalPlanStore } = require('../services/technicalPlanStore.cjs');
+const { createFeasibilityReportStore } = require('../services/feasibilityReportStore.cjs');
 const { createTemplateStore } = require('../services/templateStore.cjs');
 const { checkRequiredOnlineServices, getRequiredOnlineServiceStatus } = require('../services/requiredOnlineServices.cjs');
 const { initLocalImageRenderService } = require('../services/localImageRenderService.cjs');
+
+let pendingUiCurrentView = null;
+let agentWorkspaceServiceRef = null;
+let currentViewWebContentsId = null;
+const currentViewLifetimeBound = new WeakSet();
+
+function clearUiCurrentView() {
+  pendingUiCurrentView = null;
+  currentViewWebContentsId = null;
+  if (agentWorkspaceServiceRef?.setCurrentView) {
+    agentWorkspaceServiceRef.setCurrentView({});
+  }
+}
+
+function bindCurrentViewLifetime(webContents) {
+  if (!webContents || currentViewLifetimeBound.has(webContents)) return;
+  currentViewLifetimeBound.add(webContents);
+  const webContentsId = webContents.id;
+  const clearIfCurrent = () => {
+    if (currentViewWebContentsId === webContentsId) {
+      clearUiCurrentView();
+    }
+  };
+  webContents.once('destroyed', clearIfCurrent);
+  webContents.on('render-process-gone', clearIfCurrent);
+}
+
+function applyUiCurrentView(view, senderWebContents) {
+  if (senderWebContents?.isDestroyed?.()) {
+    clearUiCurrentView();
+    return;
+  }
+  pendingUiCurrentView = view && typeof view === 'object' ? view : {};
+  currentViewWebContentsId = senderWebContents?.id ?? null;
+  bindCurrentViewLifetime(senderWebContents);
+  if (agentWorkspaceServiceRef?.setCurrentView) {
+    agentWorkspaceServiceRef.setCurrentView(pendingUiCurrentView);
+  }
+}
 
 function normalizeExternalUrl(value) {
   const raw = String(value || '').trim();
@@ -80,10 +121,24 @@ const workspaceDatabaseChannels = [
   'technical-plan:set-workflow-kind',
   'technical-plan:save-outline-config',
   'technical-plan:save-outline',
+  'technical-plan:save-global-facts-config',
   'technical-plan:save-global-facts',
   'technical-plan:save-content-generation-options',
   'technical-plan:save-chapter-content',
   'technical-plan:clear',
+  'feasibility-report:load-state',
+  'feasibility-report:import-source-documents',
+  'feasibility-report:remove-source-document',
+  'feasibility-report:read-source-markdown',
+  'feasibility-report:read-combined-source-markdown',
+  'feasibility-report:update-step',
+  'feasibility-report:save-project-info',
+  'feasibility-report:save-analysis',
+  'feasibility-report:save-outline-config',
+  'feasibility-report:save-outline',
+  'feasibility-report:save-key-parameters',
+  'feasibility-report:save-chapter-content',
+  'feasibility-report:clear',
   'duplicate-check:load-state',
   'duplicate-check:save-files',
   'duplicate-check:save-ui-state',
@@ -117,6 +172,12 @@ const workspaceDatabaseChannels = [
   'tasks:start-rejection-items-extraction',
   'tasks:start-rejection-check',
   'tasks:start-duplicate-analysis',
+  'tasks:start-feasibility-analysis',
+  'tasks:start-feasibility-outline',
+  'tasks:start-feasibility-parameters',
+  'tasks:start-feasibility-content',
+  'tasks:pause-feasibility-content',
+  'tasks:start-feasibility-human-writing',
   'tasks:get-active',
   'templates:list',
   'templates:get',
@@ -190,16 +251,24 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   const knowledgeBaseStore = createKnowledgeBaseStore({ app, db: sqliteDatabase.db });
   const knowledgeBaseService = createKnowledgeBaseService({ app, aiService, configStore, knowledgeBaseStore });
   const technicalPlanStore = createTechnicalPlanStore({ app, db: sqliteDatabase.db, fileService, agentService, taskLogStore });
+  const feasibilityReportStore = createFeasibilityReportStore({ app, db: sqliteDatabase.db, fileService, taskLogStore, agentService });
   const duplicateCheckStore = createDuplicateCheckStore({ app, db: sqliteDatabase.db, taskLogStore });
   const rejectionCheckStore = createRejectionCheckStore({ app, db: sqliteDatabase.db, fileService, technicalPlanStore, taskLogStore });
   const templateStore = createTemplateStore({ db: sqliteDatabase.db });
   const duplicateCheckService = createDuplicateCheckService({ app, configStore, workspaceStore: duplicateCheckStore });
-  const taskService = createTaskService({ aiService, agentService, autoConfirmationService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, knowledgeBaseService, duplicateCheckService });
-  const agentWorkspaceService = createAgentWorkspaceService({ agentService, taskService, technicalPlanStore });
+  const taskService = createTaskService({ aiService, agentService, autoConfirmationService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, feasibilityReportStore, knowledgeBaseService, duplicateCheckService });
+  const agentWorkspaceService = createAgentWorkspaceService({ agentService, taskService, technicalPlanStore, feasibilityReportStore });
+  agentWorkspaceServiceRef = agentWorkspaceService;
+  technicalPlanStore.setAgentWorkspaceChangeListener(() => agentWorkspaceService.emitWorkspacesChanged());
+  feasibilityReportStore.setAgentWorkspaceChangeListener(() => agentWorkspaceService.emitWorkspacesChanged());
+  if (pendingUiCurrentView) {
+    agentWorkspaceService.setCurrentView(pendingUiCurrentView);
+  }
 
   clearWorkspaceDatabaseIpc();
   registerKnowledgeBaseIpc({ knowledgeBaseService });
   registerTechnicalPlanIpc({ technicalPlanStore, taskService });
+  registerFeasibilityReportIpc({ feasibilityReportStore, taskService });
   registerDuplicateCheckIpc({ duplicateCheckStore });
   registerRejectionCheckIpc({ rejectionCheckStore, taskService });
   registerTemplateIpc({ templateStore });
@@ -335,6 +404,10 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
     technicalPlanStore: null,
     duplicateCheckStore: null,
     rejectionCheckStore: null,
+  });
+  ipcMain.handle('ui:set-current-view', (event, view) => {
+    applyUiCurrentView(view, event.sender);
+    return { success: true };
   });
   registerPendingWorkspaceDatabaseIpc(databaseStatus.getStatus);
 
