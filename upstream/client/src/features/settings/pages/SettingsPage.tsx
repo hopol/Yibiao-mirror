@@ -1,9 +1,9 @@
-﻿import { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { trackConfigUsage } from '../../../shared/analytics/analytics';
 import { AppSwitch, DetailHelpLink, FloatingToolbar, InlineSpinner, InputWithAction, OfflineLicenseActivationDialog, useAutoAnswer, useToast } from '../../../shared/ui';
 import { showUpdateReadyToast } from '../../../shared/updateToast';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
-import type { AgentModeScenariosConfig, AgentSelfCheckResult, AgentSelfCheckStepStatus, AiRequestMode, ClientConfig, ComponentsConfig, ConfiguredTextModelProvider, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelSize, ImageModelStatus, LicenseRuntimeStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
+import type { AgentModeScenariosConfig, AgentSelfCheckResult, AgentSelfCheckStepStatus, AiRequestMode, ClientConfig, ComponentsConfig, ConfiguredTextModelProvider, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelRatio, ImageModelSize, ImageModelStatus, LicenseRuntimeStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
 import type { SettingsPageState } from '../types';
 
 type SettingsTab = 'general' | 'text-model' | 'image-model' | 'components' | 'agent' | 'about';
@@ -196,6 +196,7 @@ const imageProviders: Array<{ value: ImageModelProvider; label: string }> = [
   { value: 'google-ai-studio', label: 'Google AI Studio' },
   { value: 'agnes', label: 'Agnes AI' },
   { value: 'custom', label: '自定义 OpenAI-like' },
+  { value: 'comfyui', label: 'ComfyUI（本地/局域网）' },
 ];
 
 const DEFAULT_IMAGE_CONCURRENCY_LIMIT = 2;
@@ -218,12 +219,44 @@ const googleImageSizeOptions: Array<{ value: ImageModelSize; label: string }> = 
   { value: '4K', label: '4K' },
 ];
 
-function getImageSizeOptions(provider: ImageModelProvider) {
-  return provider === 'google-ai-studio' ? googleImageSizeOptions : openAICompatibleImageSizeOptions;
+const agnesImage20SizeOptions: Array<{ value: ImageModelSize; label: string }> = [
+  { value: '1024x1024', label: '1024×1024（方图）' },
+  { value: '1024x768', label: '1024×768（横图）' },
+  { value: '768x1024', label: '768×1024（竖图）' },
+];
+
+const agnesImage21SizeOptions: Array<{ value: ImageModelSize; label: string }> = [
+  { value: '1K', label: '1K' },
+  { value: '2K', label: '2K' },
+  { value: '3K', label: '3K' },
+  { value: '4K', label: '4K' },
+];
+
+const agnesImageRatioOptions: Array<{ value: ImageModelRatio; label: string }> = [
+  { value: '1:1', label: '1:1（方图）' },
+  { value: '3:4', label: '3:4（竖图）' },
+  { value: '4:3', label: '4:3（横图）' },
+  { value: '16:9', label: '16:9（宽屏）' },
+  { value: '9:16', label: '9:16（竖屏）' },
+  { value: '2:3', label: '2:3（竖图）' },
+  { value: '3:2', label: '3:2（横图）' },
+  { value: '21:9', label: '21:9（超宽屏）' },
+];
+
+function getImageSizeOptions(provider: ImageModelProvider, modelName = '') {
+  if (provider === 'google-ai-studio') return googleImageSizeOptions;
+  if (provider === 'comfyui') return openAICompatibleImageSizeOptions.filter((option) => option.value !== 'auto');
+  if (provider === 'agnes' && modelName === 'agnes-image-2.1-flash') return agnesImage21SizeOptions;
+  if (provider === 'agnes') return agnesImage20SizeOptions;
+  return openAICompatibleImageSizeOptions;
 }
 
 function normalizeImageSize(provider: ImageModelProvider, value?: string): ImageModelSize {
-  const options = getImageSizeOptions(provider);
+  const options = provider === 'google-ai-studio'
+    ? googleImageSizeOptions
+    : provider === 'agnes'
+      ? [...openAICompatibleImageSizeOptions, ...agnesImage20SizeOptions, ...agnesImage21SizeOptions]
+      : openAICompatibleImageSizeOptions;
   const candidate = String(value || '').trim() as ImageModelSize;
   return options.some((option) => option.value === candidate)
     ? candidate
@@ -273,7 +306,8 @@ const imageProviderDefaults: ImageModelProfiles = {
     api_key: '',
     model_name: '',
     image_size: '1024x1024',
-    request_mode: 'stream',
+    image_ratio: '1:1',
+    request_mode: 'normal',
     concurrency_limit: DEFAULT_IMAGE_CONCURRENCY_LIMIT,
     status: 'untested',
     tested_at: '',
@@ -291,6 +325,19 @@ const imageProviderDefaults: ImageModelProfiles = {
     tested_at: '',
     last_error: '',
   },
+  comfyui: {
+    provider: 'comfyui',
+    base_url: 'http://127.0.0.1:8188',
+    api_key: '',
+    model_name: 'z-image-turbo',
+    image_size: '1024x1024',
+    request_mode: 'normal',
+    concurrency_limit: 1,
+    comfyui_workflow: '',
+    status: 'untested',
+    tested_at: '',
+    last_error: '',
+  },
 };
 
 const imageProviderApiKeyUrls: Record<ImageModelProvider, string> = {
@@ -299,6 +346,7 @@ const imageProviderApiKeyUrls: Record<ImageModelProvider, string> = {
   'google-ai-studio': 'https://aistudio.google.com/api-keys',
   agnes: 'https://platform.agnes-ai.com/settings/apiKeys',
   custom: '',
+  comfyui: '',
 };
 
 const imageProviderLabels: Record<ImageModelProvider, string> = {
@@ -307,6 +355,7 @@ const imageProviderLabels: Record<ImageModelProvider, string> = {
   'google-ai-studio': 'Google AI Studio',
   agnes: 'Agnes AI',
   custom: '自定义生图服务',
+  comfyui: 'ComfyUI',
 };
 
 function getImageBaseUrlDescription(provider: ImageModelProvider) {
@@ -314,6 +363,7 @@ function getImageBaseUrlDescription(provider: ImageModelProvider) {
   if (provider === 'volcengine') return '火山方舟 OpenAI 兼容接口地址';
   if (provider === 'agnes') return 'Agnes AI OpenAI 兼容接口地址';
   if (provider === 'custom') return '填写兼容 OpenAI /images/generations 的接口地址';
+  if (provider === 'comfyui') return 'ComfyUI 服务地址，例如 http://127.0.0.1:8188 或局域网地址';
   return 'Google Gemini API REST 地址';
 }
 
@@ -322,6 +372,7 @@ function getImageApiKeyDescription(provider: ImageModelProvider) {
   if (provider === 'volcengine') return '用于调用火山方舟图片生成 API';
   if (provider === 'agnes') return '用于调用 Agnes AI 图片生成 API';
   if (provider === 'custom') return '用于调用自定义 OpenAI-like 生图接口';
+  if (provider === 'comfyui') return 'ComfyUI 本地服务无需 API Key';
   return '用于调用 Google AI Studio Gemini API';
 }
 
@@ -330,6 +381,7 @@ function getImageModelDescription(provider: ImageModelProvider) {
   if (provider === 'volcengine') return '填写火山方舟控制台中已开通的模型或推理接入点 ID';
   if (provider === 'agnes') return '填写 Agnes AI 已开通的生图模型名称';
   if (provider === 'custom') return '填写自定义接口支持的生图模型名称';
+  if (provider === 'comfyui') return '可选：粘贴 ComfyUI「Save (API Format)」导出的工作流 JSON；留空则自动复用服务器上最近成功运行的文生图工作流';
   return '选择或填写支持图片生成的 Gemini 模型';
 }
 
@@ -338,6 +390,7 @@ function getImageModelPlaceholder(provider: ImageModelProvider) {
   if (provider === 'volcengine') return '请输入已开通的模型或推理接入点 ID';
   if (provider === 'agnes') return '请输入 Agnes AI 生图模型名称';
   if (provider === 'custom') return '请输入 OpenAI-like 生图模型名称';
+  if (provider === 'comfyui') return '粘贴工作流 JSON（可选，留空自动探测）';
   return 'gemini-3.1-flash-image-preview';
 }
 
@@ -353,12 +406,14 @@ function normalizeImageModelProfile(provider: ImageModelProvider, profile?: Part
   const useProviderDefaultImageModel = provider === 'jinlong' && !String(profile?.model_name ?? '').trim();
   return {
     provider,
-    base_url: provider === 'custom' ? profile?.base_url ?? defaults.base_url : defaults.base_url,
+    base_url: provider === 'custom' || provider === 'comfyui' ? profile?.base_url ?? defaults.base_url : defaults.base_url,
     api_key: profile?.api_key ?? defaults.api_key,
     model_name: useProviderDefaultImageModel ? defaults.model_name : profile?.model_name ?? defaults.model_name,
     image_size: normalizeImageSize(provider, useProviderDefaultImageModel ? defaults.image_size : profile?.image_size ?? defaults.image_size),
+    ...(provider === 'agnes' ? { image_ratio: profile?.image_ratio ?? defaults.image_ratio ?? '1:1' } : {}),
     request_mode: normalizeAiRequestMode(useProviderDefaultImageModel ? defaults.request_mode : profile?.request_mode ?? defaults.request_mode),
     concurrency_limit: normalizeImageConcurrencyLimit(profile?.concurrency_limit ?? defaults.concurrency_limit),
+    comfyui_workflow: profile?.comfyui_workflow ?? defaults.comfyui_workflow ?? '',
     status: useProviderDefaultImageModel ? defaults.status : profile?.status ?? defaults.status,
     tested_at: useProviderDefaultImageModel ? defaults.tested_at : profile?.tested_at ?? defaults.tested_at,
     last_error: useProviderDefaultImageModel ? defaults.last_error : profile?.last_error ?? defaults.last_error,
@@ -429,12 +484,14 @@ function normalizeImageModelProfiles(profiles?: Partial<ImageModelProfiles>): Im
 function imageProfileFromState(imageModel: SettingsPageState['imageModel']): ImageModelConfig {
   return {
     provider: imageModel.provider,
-    base_url: imageModel.provider === 'custom' ? imageModel.base_url || '' : imageProviderDefaults[imageModel.provider].base_url,
+    base_url: imageModel.provider === 'custom' || imageModel.provider === 'comfyui' ? imageModel.base_url || '' : imageProviderDefaults[imageModel.provider].base_url,
     api_key: imageModel.api_key,
     model_name: imageModel.model_name,
     image_size: normalizeImageSize(imageModel.provider, imageModel.image_size),
+    ...(imageModel.provider === 'agnes' ? { image_ratio: imageModel.image_ratio || '1:1' } : {}),
     request_mode: imageModel.request_mode,
     concurrency_limit: normalizeImageConcurrencyLimit(imageModel.concurrency_limit),
+    comfyui_workflow: imageModel.comfyui_workflow || '',
     status: imageModel.status || 'untested',
     tested_at: imageModel.tested_at || '',
     last_error: imageModel.last_error || '',
@@ -1539,6 +1596,8 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
     return '启动后自动检查，每 30 分钟轮询';
   })();
   const licenseSourceLabel = getLicenseSourceLabel(licenseStatus);
+  const currentImageSizeOptions = getImageSizeOptions(state.imageModel.provider, state.imageModel.model_name);
+  const currentImageSizeSupported = currentImageSizeOptions.some((option) => option.value === state.imageModel.image_size);
 
   return (
     <div className="settings-page">
@@ -1919,11 +1978,12 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
               <input
                 type="text"
                 value={state.imageModel.base_url || ''}
-                placeholder={state.imageModel.provider === 'custom' ? 'https://api.example.com/v1' : imageProviderDefaults[state.imageModel.provider].base_url}
+                placeholder={state.imageModel.provider === 'custom' ? 'https://api.example.com/v1' : state.imageModel.provider === 'comfyui' ? 'http://127.0.0.1:8188' : imageProviderDefaults[state.imageModel.provider].base_url}
                 onChange={(event) => updateImageModelConfig({ base_url: event.target.value }, { clearModels: true })}
-                disabled={state.imageModel.provider !== 'custom'}
+                disabled={state.imageModel.provider !== 'custom' && state.imageModel.provider !== 'comfyui'}
               />
             </label>
+            {state.imageModel.provider !== 'comfyui' && (
             <label className="settings-row">
               <div className="settings-row-copy">
                 <strong>API Key</strong>
@@ -1939,13 +1999,28 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 onAction={() => { void openImageProviderApiKeyPage(); }}
               />
             </label>
+            )}
+            {state.imageModel.provider === 'comfyui' && (
+            <label className="settings-row">
+              <div className="settings-row-copy">
+                <strong>工作流 JSON</strong>
+                <span>{getImageModelDescription(state.imageModel.provider)}</span>
+              </div>
+              <textarea
+                rows={6}
+                value={state.imageModel.comfyui_workflow || ''}
+                placeholder={getImageModelPlaceholder(state.imageModel.provider)}
+                onChange={(event) => updateImageModelConfig({ comfyui_workflow: event.target.value })}
+              />
+            </label>
+            )}
             <label className="settings-row">
               <div className="settings-row-copy">
                 <strong>模型名称</strong>
-                <span>{getImageModelDescription(state.imageModel.provider)}</span>
+                <span>{state.imageModel.provider === 'comfyui' ? 'ComfyUI 由工作流决定模型，无需填写模型名称' : getImageModelDescription(state.imageModel.provider)}</span>
               </div>
               <div className="settings-control-with-action">
-                {imageModels.length > 0 ? (
+                {state.imageModel.provider !== 'comfyui' && (imageModels.length > 0 ? (
                   <select
                     value={state.imageModel.model_name}
                     onChange={(event) => updateImageModelConfig({ model_name: event.target.value })}
@@ -1959,7 +2034,8 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                     placeholder={getImageModelPlaceholder(state.imageModel.provider)}
                     onChange={(event) => updateImageModelConfig({ model_name: event.target.value })}
                   />
-                )}
+                ))}
+                {state.imageModel.provider !== 'comfyui' && (
                 <button
                   type="button"
                   className="inline-action"
@@ -1969,6 +2045,7 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                   {loadingModels === 'image' && <InlineSpinner />}
                   {loadingModels === 'image' ? '获取中' : '获取'}
                 </button>
+                )}
                 <button type="button" className="inline-action" onClick={testImageConfig} disabled={testingImageModel}>
                   {testingImageModel && <InlineSpinner />}
                   {testingImageModel ? '测试中' : '测试'}
@@ -1982,17 +2059,46 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
             <label className="settings-row">
               <div className="settings-row-copy">
                 <strong>图片尺寸</strong>
-                <span>{state.imageModel.provider === 'google-ai-studio' ? '使用 Google AI Studio 官方 imageSize 枚举' : '使用 OpenAI Image API 官方常用尺寸枚举'}</span>
+                <span>{state.imageModel.provider === 'google-ai-studio'
+                  ? '使用 Google AI Studio 官方 imageSize 枚举'
+                  : state.imageModel.provider === 'comfyui'
+                    ? '尺寸会注入工作流的 Latent 节点（宽×高）'
+                    : state.imageModel.provider === 'agnes' && state.imageModel.model_name === 'agnes-image-2.1-flash'
+                      ? 'Agnes Image 2.1 Flash 使用 1K 至 4K 尺寸档位'
+                      : state.imageModel.provider === 'agnes'
+                        ? 'Agnes Image 2.0 Flash 使用官方支持的具体尺寸'
+                        : '使用 OpenAI Image API 官方常用尺寸枚举'}</span>
               </div>
               <select
-                value={normalizeImageSize(state.imageModel.provider, state.imageModel.image_size)}
+                value={state.imageModel.image_size}
                 onChange={(event) => updateImageModelConfig({ image_size: event.target.value as ImageModelSize })}
               >
-                {getImageSizeOptions(state.imageModel.provider).map((option) => (
+                {!currentImageSizeSupported && (
+                  <option value={state.imageModel.image_size} disabled>
+                    {state.imageModel.image_size}（当前模型不支持，请重新选择）
+                  </option>
+                )}
+                {currentImageSizeOptions.map((option) => (
                   <option value={option.value} key={option.value}>{option.label}</option>
                 ))}
               </select>
             </label>
+            {state.imageModel.provider === 'agnes' && state.imageModel.model_name === 'agnes-image-2.1-flash' && (
+              <label className="settings-row">
+                <div className="settings-row-copy">
+                  <strong>图片宽高比</strong>
+                  <span>与 1K 至 4K 尺寸档位配合使用</span>
+                </div>
+                <select
+                  value={state.imageModel.image_ratio || '1:1'}
+                  onChange={(event) => updateImageModelConfig({ image_ratio: event.target.value as ImageModelRatio })}
+                >
+                  {agnesImageRatioOptions.map((option) => (
+                    <option value={option.value} key={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+            )}
             <label className="settings-row">
               <div className="settings-row-copy">
                 <strong>并发上限</strong>
@@ -2007,20 +2113,26 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                 onChange={(event) => updateImageModelConfig({ concurrency_limit: parseImageConcurrencyLimitInput(event.target.value) })}
               />
             </label>
+            {state.imageModel.provider !== 'comfyui' && (
             <label className="settings-row">
               <div className="settings-row-copy">
                 <strong>请求方式</strong>
-                <span>流式请求只影响后端调用方式，应用仍等待完整图片生成后继续流程</span>
+                <span>{state.imageModel.provider === 'agnes'
+                  ? 'Agnes 生图接口使用普通请求'
+                  : '流式请求只影响后端调用方式，应用仍等待完整图片生成后继续流程'}</span>
               </div>
               <select
                 value={state.imageModel.request_mode}
                 onChange={(event) => updateImageModelConfig({ request_mode: event.target.value as AiRequestMode })}
               >
                 {aiRequestModeOptions.map((option) => (
-                  <option value={option.value} key={option.value}>{option.label}</option>
+                  <option value={option.value} key={option.value} disabled={state.imageModel.provider === 'agnes' && option.value === 'stream'}>
+                    {option.label}{state.imageModel.provider === 'agnes' && option.value === 'stream' ? '（Agnes 不支持）' : ''}
+                  </option>
                 ))}
               </select>
             </label>
+            )}
           </div>
           {imageTestPreview && (
             <div className="image-test-preview">
