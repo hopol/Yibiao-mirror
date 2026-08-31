@@ -1,10 +1,9 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const crypto = require('node:crypto');
 const { getConfigFilePath } = require('../utils/paths.cjs');
+const { createAnalyticsClientId } = require('../utils/machineIdentity.cjs');
 
 const textModelProviders = ['jinlong', 'volcengine', 'deepseek', 'agnes', 'custom'];
-const legacyTextModelProviders = ['longcat'];
 const imageModelProviders = ['jinlong', 'volcengine', 'google-ai-studio', 'agnes', 'custom', 'comfyui'];
 const aiRequestModes = ['normal', 'stream'];
 const updateChannels = ['github', 'cloudflare', 'atomgit'];
@@ -38,6 +37,7 @@ const defaultTextModelProfiles = {
     api_key: '',
     base_url: textProviderBaseUrls.jinlong,
     model_name: 'gpt-3.5-turbo',
+    multimodal_enabled: false,
     reasoning_effort: '',
     context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
     concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
@@ -49,6 +49,7 @@ const defaultTextModelProfiles = {
     api_key: '',
     base_url: textProviderBaseUrls.volcengine,
     model_name: '',
+    multimodal_enabled: false,
     reasoning_effort: '',
     context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
     concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
@@ -60,6 +61,7 @@ const defaultTextModelProfiles = {
     api_key: '',
     base_url: textProviderBaseUrls.deepseek,
     model_name: '',
+    multimodal_enabled: false,
     reasoning_effort: '',
     context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
     concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
@@ -71,6 +73,7 @@ const defaultTextModelProfiles = {
     api_key: '',
     base_url: textProviderBaseUrls.agnes,
     model_name: '',
+    multimodal_enabled: false,
     reasoning_effort: '',
     context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
     concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
@@ -82,20 +85,7 @@ const defaultTextModelProfiles = {
     api_key: '',
     base_url: '',
     model_name: '',
-    reasoning_effort: '',
-    context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
-    concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
-    temperature_enabled: false,
-    temperature: DEFAULT_TEXT_TEMPERATURE,
-    request_mode: 'stream',
-  },
-};
-
-const legacyTextModelProfiles = {
-  longcat: {
-    api_key: '',
-    base_url: 'https://api.longcat.chat/openai/v1',
-    model_name: '',
+    multimodal_enabled: false,
     reasoning_effort: '',
     context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
     concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
@@ -263,6 +253,7 @@ const defaultConfig = {
   api_key: '',
   base_url: textProviderBaseUrls.jinlong,
   model_name: 'gpt-3.5-turbo',
+  multimodal_enabled: false,
   reasoning_effort: '',
   context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
   concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
@@ -295,10 +286,6 @@ const defaultConfig = {
   analytics_created_at: '',
 };
 
-function createAnalyticsClientId() {
-  return crypto.randomUUID();
-}
-
 function createAnalyticsCreatedAt() {
   const parts = new Intl.DateTimeFormat('zh-CN', {
     timeZone: 'Asia/Shanghai',
@@ -312,10 +299,6 @@ function createAnalyticsCreatedAt() {
 
 function isTextModelProvider(value) {
   return textModelProviders.includes(value);
-}
-
-function isLegacyTextModelProvider(value) {
-  return legacyTextModelProviders.includes(value);
 }
 
 function isImageModelProvider(value) {
@@ -349,6 +332,11 @@ function normalizeTextTemperature(value, fallback = DEFAULT_TEXT_TEMPERATURE) {
 
 // 归一化文本模型温度开关。
 function normalizeTextTemperatureEnabled(value, fallback = false) {
+  return value === undefined ? fallback : Boolean(value);
+}
+
+// 归一化文本模型多模态开关，旧配置缺失时默认关闭。
+function normalizeTextMultimodalEnabled(value, fallback = false) {
   return value === undefined ? fallback : Boolean(value);
 }
 
@@ -392,7 +380,7 @@ function normalizeComponentsConfig(source) {
 }
 
 function normalizeTextModelProfile(provider, profile) {
-  const defaults = defaultTextModelProfiles[provider] || legacyTextModelProfiles[provider];
+  const defaults = defaultTextModelProfiles[provider];
   const source = profile || {};
   const sourceBaseUrl = provider === 'custom'
     ? source.base_url !== undefined ? source.base_url : defaults.base_url
@@ -401,6 +389,7 @@ function normalizeTextModelProfile(provider, profile) {
     api_key: source.api_key !== undefined ? source.api_key : defaults.api_key,
     base_url: sourceBaseUrl,
     model_name: source.model_name !== undefined ? source.model_name : defaults.model_name,
+    multimodal_enabled: normalizeTextMultimodalEnabled(source.multimodal_enabled, defaults.multimodal_enabled),
     reasoning_effort: normalizeReasoningEffort(source.reasoning_effort, defaults.reasoning_effort),
     context_length_limit: normalizeTextContextLengthLimit(source.context_length_limit, defaults.context_length_limit),
     concurrency_limit: normalizeTextConcurrencyLimit(source.concurrency_limit, defaults.concurrency_limit),
@@ -418,11 +407,6 @@ function normalizeTextModelProfiles(sourceProfiles) {
       sourceProfiles && typeof sourceProfiles === 'object' ? sourceProfiles[provider] : null,
     );
   });
-  legacyTextModelProviders.forEach((provider) => {
-    if (sourceProfiles && typeof sourceProfiles === 'object' && sourceProfiles[provider]) {
-      profiles[provider] = normalizeTextModelProfile(provider, sourceProfiles[provider]);
-    }
-  });
   return profiles;
 }
 
@@ -434,6 +418,7 @@ function textProfileFromFlatConfig(source, fallback, provider) {
     api_key: source.api_key !== undefined ? source.api_key : fallback.api_key,
     base_url: sourceBaseUrl,
     model_name: source.model_name !== undefined ? source.model_name : fallback.model_name,
+    multimodal_enabled: normalizeTextMultimodalEnabled(source.multimodal_enabled, fallback.multimodal_enabled),
     reasoning_effort: normalizeReasoningEffort(source.reasoning_effort, fallback.reasoning_effort),
     context_length_limit: normalizeTextContextLengthLimit(source.context_length_limit !== undefined ? source.context_length_limit : fallback.context_length_limit, fallback.context_length_limit),
     concurrency_limit: normalizeTextConcurrencyLimit(source.concurrency_limit !== undefined ? source.concurrency_limit : fallback.concurrency_limit, fallback.concurrency_limit),
@@ -468,6 +453,7 @@ function textProfileFromUnknownProvider(source, sourceProvider, fallback) {
     api_key: pickTextProfileField(source.api_key, selectedProfile?.api_key, fallback.api_key),
     base_url: pickTextProfileField(source.base_url, selectedProfile?.base_url, fallback.base_url),
     model_name: pickTextProfileField(source.model_name, selectedProfile?.model_name, fallback.model_name),
+    multimodal_enabled: normalizeTextMultimodalEnabled(source.multimodal_enabled ?? selectedProfile?.multimodal_enabled, fallback.multimodal_enabled),
     reasoning_effort: normalizeReasoningEffort(source.reasoning_effort ?? selectedProfile?.reasoning_effort, fallback.reasoning_effort),
     context_length_limit: normalizeTextContextLengthLimit(pickTextProfileField(source.context_length_limit, selectedProfile?.context_length_limit, fallback.context_length_limit), fallback.context_length_limit),
     concurrency_limit: normalizeTextConcurrencyLimit(pickTextProfileField(source.concurrency_limit, selectedProfile?.concurrency_limit, fallback.concurrency_limit), fallback.concurrency_limit),
@@ -700,15 +686,13 @@ function normalizeConfig(config) {
   const source = config || {};
   const hasTextProvider = Object.prototype.hasOwnProperty.call(source, 'text_model_provider');
   const rawTextProvider = typeof source.text_model_provider === 'string' ? source.text_model_provider : '';
-  const sourceTextProvider = isTextModelProvider(rawTextProvider) || isLegacyTextModelProvider(rawTextProvider)
-    ? rawTextProvider
-    : '';
-  const textModelProvider = sourceTextProvider || (hasTextProvider || config ? 'custom' : defaultConfig.text_model_provider);
+  const sourceTextProvider = isTextModelProvider(rawTextProvider) ? rawTextProvider : '';
+  const textModelProvider = sourceTextProvider
+    || (hasTextProvider ? defaultConfig.text_model_provider : config ? 'custom' : defaultConfig.text_model_provider);
   const textModelProfiles = normalizeTextModelProfiles(source.text_model_profiles);
   if (sourceTextProvider) {
     const fallbackProfile = textModelProfiles[textModelProvider]
-      || defaultTextModelProfiles[textModelProvider]
-      || legacyTextModelProfiles[textModelProvider];
+      || defaultTextModelProfiles[textModelProvider];
     textModelProfiles[textModelProvider] = textProfileFromFlatConfig(source, fallbackProfile, textModelProvider);
   } else if (textModelProvider === 'custom' && !hasTextModelProfileData(textModelProfiles.custom)) {
     textModelProfiles.custom = textProfileFromUnknownProvider(source, rawTextProvider, textModelProfiles.custom);
@@ -735,6 +719,7 @@ function normalizeConfig(config) {
     api_key: activeTextProfile.api_key,
     base_url: activeTextProfile.base_url,
     model_name: activeTextProfile.model_name,
+    multimodal_enabled: activeTextProfile.multimodal_enabled,
     reasoning_effort: activeTextProfile.reasoning_effort,
     context_length_limit: activeTextProfile.context_length_limit,
     concurrency_limit: activeTextProfile.concurrency_limit,

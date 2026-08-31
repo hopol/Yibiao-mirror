@@ -1,4 +1,14 @@
-export type { AiHttpErrorPayload, ChatCompletionRequest, ChatMessage, JsonCompletionRequest } from './ai';
+export type {
+  AiHttpErrorPayload,
+  ChatCompletionRequest,
+  ChatContentPart,
+  ChatImageDetail,
+  ChatImageUrlContentPart,
+  ChatLocalImageContentPart,
+  ChatMessage,
+  ChatTextContentPart,
+  JsonCompletionRequest,
+} from './ai';
 export type {
   DuplicateAnalysisTabId,
   DuplicateAnalysisStatus,
@@ -32,7 +42,6 @@ export type {
   AiRequestMode,
   AgentModeScenariosConfig,
   ClientConfig,
-  ConfiguredTextModelProvider,
   ConfigSaveResult,
   ComponentsConfig,
   FileParserConfig,
@@ -44,7 +53,8 @@ export type {
   ImageModelRatio,
   ImageModelSize,
   ImageModelStatus,
-  LegacyTextModelProvider,
+  ModelImageInputStatus,
+  ModelTemperatureStatus,
   ModelInfoCacheEntry,
   ModelInfoResult,
   ModelListResult,
@@ -84,7 +94,7 @@ export {
 } from './exportFormat';
 export type { OutlineContentMode, OutlineData, OutlineExpansionMode, OutlineItem, OutlineMode, OutlineWordControlOptions } from './outline';
 export { DEFAULT_OUTLINE_WORD_CONTROL_OPTIONS, OUTLINE_CONTENT_MODE_LABELS } from './outline';
-export type { AgentDiagnosticSection, AgentMonitorEvent, AgentMonitorEventType, AgentMonitorSnapshot, AgentQuestion, AgentQuestionAnswerPayload, AgentQuestionAnswerResult, AgentQuestionOption, AgentRetryAttempt, AgentRunFile, AgentRunPayload, AgentRunResult, AgentRuntimeActiveTask, AgentRuntimePhase, AgentRuntimeStatus, AgentSelfCheckReportExportResult, AgentSelfCheckResult, AgentSelfCheckStatus, AgentSelfCheckStep, AgentSelfCheckStepStatus, AutoConfirmationState, GpuHardwareAccelerationStatus, LatestReleaseInfo, LicenseOfflineActivationResult, LicenseRuntimeStatus, UpdateCheckResult, WordExportProgressEvent, WordExportResult, WorkspaceDatabasePhase, WorkspaceDatabaseStatus, YibiaoBridge } from './ipc';
+export type { AgentDiagnosticSection, AgentMonitorEvent, AgentMonitorEventType, AgentMonitorSnapshot, AgentQuestion, AgentQuestionAnswerPayload, AgentQuestionAnswerResult, AgentQuestionOption, AgentRetryAttempt, AgentRunFile, AgentRunPayload, AgentRunResult, AgentRuntimeActiveTask, AgentRuntimePhase, AgentRuntimeStatus, AgentSelfCheckReportExportResult, AgentSelfCheckResult, AgentSelfCheckStatus, AgentSelfCheckStep, AgentSelfCheckStepStatus, AutoConfirmationState, DonationCreateRequest, DonationIntent, DonationOrderStatus, DonationPaymentConfig, DonationPromptPayload, GpuHardwareAccelerationStatus, LatestReleaseInfo, LicenseOfflineActivationResult, LicenseRuntimeStatus, UpdateCheckResult, WordExportProgressEvent, WordExportResult, WorkspaceDatabasePhase, WorkspaceDatabaseStatus, YibiaoBridge } from './ipc';
 export type {
   RejectionCheckFinding,
   RejectionCheckResultState,
