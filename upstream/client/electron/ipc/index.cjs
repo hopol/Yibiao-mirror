@@ -1,4 +1,4 @@
-const { clipboard, dialog, ipcMain, shell } = require('electron');
+const { clipboard, dialog, ipcMain, powerMonitor, shell } = require('electron');
 const { registerAgentIpc } = require('./agentIpc.cjs');
 const { registerAiIpc } = require('./aiIpc.cjs');
 const { registerAutoConfirmationIpc } = require('./autoConfirmationIpc.cjs');
@@ -10,6 +10,7 @@ const { registerExportIpc } = require('./exportIpc.cjs');
 const { registerFileIpc } = require('./fileIpc.cjs');
 const { registerKnowledgeBaseIpc } = require('./knowledgeBaseIpc.cjs');
 const { registerLicenseIpc } = require('./licenseIpc.cjs');
+const { registerOfficialAccountIpc, registerOfficialInvoiceIpc } = require('./officialAccountIpc.cjs');
 const { registerRejectionCheckIpc } = require('./rejectionCheckIpc.cjs');
 const { registerTaskIpc } = require('./taskIpc.cjs');
 const { registerTechnicalPlanIpc } = require('./technicalPlanIpc.cjs');
@@ -32,6 +33,7 @@ const { createFileService } = require('../services/fileService.cjs');
 const { createKnowledgeBaseService } = require('../services/knowledgeBaseService.cjs');
 const { createKnowledgeBaseStore } = require('../services/knowledgeBaseStore.cjs');
 const { createLicenseService } = require('../services/licenseService.cjs');
+const { createOfficialAccountService } = require('../services/officialAccountService.cjs');
 const { createRejectionCheckStore } = require('../services/rejectionCheckStore.cjs');
 const { createSqliteDatabase } = require('../services/sqliteDatabase.cjs');
 const { createSystemFontService } = require('../services/systemFontService.cjs');
@@ -41,6 +43,7 @@ const { createAgentWorkspaceService } = require('../services/agentWorkspaceServi
 const { createTaskLogStore } = require('../services/taskLogStore.cjs');
 const { createTechnicalPlanStore } = require('../services/technicalPlanStore.cjs');
 const { createFeasibilityReportStore } = require('../services/feasibilityReportStore.cjs');
+const { createOfficialInvoiceStore } = require('../services/officialInvoiceStore.cjs');
 const { createTemplateStore } = require('../services/templateStore.cjs');
 const { checkRequiredOnlineServices, getRequiredOnlineServiceStatus } = require('../services/requiredOnlineServices.cjs');
 const { initLocalImageRenderService } = require('../services/localImageRenderService.cjs');
@@ -115,6 +118,8 @@ function sendToWebContents(webContents, channel, payload) {
 }
 
 const workspaceDatabaseChannels = [
+  'official-account:get-invoice-info',
+  'official-account:save-invoice-info',
   'technical-plan:load-state',
   'technical-plan:import-tender-document',
   'technical-plan:remove-tender-document',
@@ -161,6 +166,7 @@ const workspaceDatabaseChannels = [
   'rejection-check:export-excel',
   'rejection-check:clear',
   'knowledge-base:list',
+  'knowledge-base:search',
   'knowledge-base:create-folder',
   'knowledge-base:rename-folder',
   'knowledge-base:delete-folder',
@@ -289,6 +295,7 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
   registerDuplicateCheckIpc({ duplicateCheckStore, checkResultExportService });
   registerRejectionCheckIpc({ rejectionCheckStore, taskService, checkResultExportService });
   registerTemplateIpc({ templateStore });
+  registerOfficialInvoiceIpc({ officialInvoiceStore: createOfficialInvoiceStore({ db: sqliteDatabase.db }) });
   registerTaskIpc({ taskService });
   updateStatus({ phase: 'ready', ready: true, message: '本地数据库已就绪' });
   
@@ -315,6 +322,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   const configStore = createConfigStore(app);
   initLocalImageRenderService({ configStore });
   const licenseService = createLicenseService({ app, configStore });
+  const officialAccountService = createOfficialAccountService({ app, configStore, powerMonitor });
   const aiService = createAiService({ app, configStore });
   const developerExpansionReplaceTestService = createDeveloperExpansionReplaceTestService({ aiService });
   const donationService = createDonationService({
@@ -333,6 +341,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   let gpuTrialRelaunchStarted = false;
 
   const closeServices = async () => {
+    await officialAccountService.close();
     donationService.close?.();
     await agentService.close?.();
     autoConfirmationService.close?.();
@@ -418,6 +427,8 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   });
   registerDonationIpc({ donationService });
   registerLicenseIpc({ licenseService });
+  registerOfficialAccountIpc({ officialAccountService });
+  void officialAccountService.start().catch(() => undefined);
   registerAiIpc({ aiService });
   registerAgentIpc({ agentService });
   registerAutoConfirmationIpc({ autoConfirmationService });

@@ -3,7 +3,7 @@ const path = require('node:path');
 const { getConfigFilePath } = require('../utils/paths.cjs');
 const { createAnalyticsClientId } = require('../utils/machineIdentity.cjs');
 
-const textModelProviders = ['jinlong', 'volcengine', 'deepseek', 'agnes', 'custom'];
+const textModelProviders = ['official', 'jinlong', 'volcengine', 'deepseek', 'agnes', 'custom'];
 const imageModelProviders = ['jinlong', 'volcengine', 'google-ai-studio', 'agnes', 'custom', 'comfyui'];
 const aiRequestModes = ['normal', 'stream'];
 const updateChannels = ['github', 'cloudflare', 'atomgit'];
@@ -25,6 +25,7 @@ const defaultAgentModeScenarios = {
 };
 
 const textProviderBaseUrls = {
+  official: '',
   jinlong: 'https://jlaudeapi.com/v1',
   volcengine: 'https://ark.cn-beijing.volces.com/api/v3',
   deepseek: 'https://api.deepseek.com',
@@ -33,6 +34,19 @@ const textProviderBaseUrls = {
 };
 
 const defaultTextModelProfiles = {
+  official: {
+    api_key: '',
+    base_url: textProviderBaseUrls.official,
+    model_name: '',
+    multimodal_enabled: false,
+    reasoning_effort: '',
+    context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
+    output_token_limit: 0,
+    concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
+    temperature_enabled: false,
+    temperature: DEFAULT_TEXT_TEMPERATURE,
+    request_mode: 'stream',
+  },
   jinlong: {
     api_key: '',
     base_url: textProviderBaseUrls.jinlong,
@@ -40,6 +54,7 @@ const defaultTextModelProfiles = {
     multimodal_enabled: false,
     reasoning_effort: '',
     context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
+    output_token_limit: 0,
     concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
     temperature_enabled: false,
     temperature: DEFAULT_TEXT_TEMPERATURE,
@@ -52,6 +67,7 @@ const defaultTextModelProfiles = {
     multimodal_enabled: false,
     reasoning_effort: '',
     context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
+    output_token_limit: 0,
     concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
     temperature_enabled: false,
     temperature: DEFAULT_TEXT_TEMPERATURE,
@@ -64,6 +80,7 @@ const defaultTextModelProfiles = {
     multimodal_enabled: false,
     reasoning_effort: '',
     context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
+    output_token_limit: 0,
     concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
     temperature_enabled: false,
     temperature: DEFAULT_TEXT_TEMPERATURE,
@@ -76,6 +93,7 @@ const defaultTextModelProfiles = {
     multimodal_enabled: false,
     reasoning_effort: '',
     context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
+    output_token_limit: 0,
     concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
     temperature_enabled: false,
     temperature: DEFAULT_TEXT_TEMPERATURE,
@@ -88,6 +106,7 @@ const defaultTextModelProfiles = {
     multimodal_enabled: false,
     reasoning_effort: '',
     context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
+    output_token_limit: 0,
     concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
     temperature_enabled: false,
     temperature: DEFAULT_TEXT_TEMPERATURE,
@@ -248,14 +267,16 @@ const defaultExportFormat = {
 };
 
 const defaultConfig = {
-  text_model_provider: 'jinlong',
+  text_model_provider: 'official',
+  official_api_model_type: 'cost-effective',
   text_model_profiles: defaultTextModelProfiles,
   api_key: '',
-  base_url: textProviderBaseUrls.jinlong,
-  model_name: 'gpt-3.5-turbo',
+  base_url: textProviderBaseUrls.official,
+  model_name: '',
   multimodal_enabled: false,
   reasoning_effort: '',
   context_length_limit: DEFAULT_TEXT_CONTEXT_LENGTH_LIMIT,
+  output_token_limit: 0,
   concurrency_limit: DEFAULT_TEXT_CONCURRENCY_LIMIT,
   temperature_enabled: false,
   temperature: DEFAULT_TEXT_TEMPERATURE,
@@ -392,6 +413,7 @@ function normalizeTextModelProfile(provider, profile) {
     multimodal_enabled: normalizeTextMultimodalEnabled(source.multimodal_enabled, defaults.multimodal_enabled),
     reasoning_effort: normalizeReasoningEffort(source.reasoning_effort, defaults.reasoning_effort),
     context_length_limit: normalizeTextContextLengthLimit(source.context_length_limit, defaults.context_length_limit),
+    output_token_limit: Number(source.output_token_limit ?? defaults.output_token_limit),
     concurrency_limit: normalizeTextConcurrencyLimit(source.concurrency_limit, defaults.concurrency_limit),
     temperature_enabled: normalizeTextTemperatureEnabled(source.temperature_enabled, defaults.temperature_enabled),
     temperature: normalizeTextTemperature(source.temperature, defaults.temperature),
@@ -421,6 +443,7 @@ function textProfileFromFlatConfig(source, fallback, provider) {
     multimodal_enabled: normalizeTextMultimodalEnabled(source.multimodal_enabled, fallback.multimodal_enabled),
     reasoning_effort: normalizeReasoningEffort(source.reasoning_effort, fallback.reasoning_effort),
     context_length_limit: normalizeTextContextLengthLimit(source.context_length_limit !== undefined ? source.context_length_limit : fallback.context_length_limit, fallback.context_length_limit),
+    output_token_limit: Number(source.output_token_limit ?? fallback.output_token_limit),
     concurrency_limit: normalizeTextConcurrencyLimit(source.concurrency_limit !== undefined ? source.concurrency_limit : fallback.concurrency_limit, fallback.concurrency_limit),
     temperature_enabled: normalizeTextTemperatureEnabled(source.temperature_enabled, fallback.temperature_enabled),
     temperature: normalizeTextTemperature(source.temperature !== undefined ? source.temperature : fallback.temperature, fallback.temperature),
@@ -715,6 +738,7 @@ function normalizeConfig(config) {
   return {
     ...defaultConfig,
     text_model_provider: textModelProvider,
+    official_api_model_type: source.official_api_model_type ?? defaultConfig.official_api_model_type,
     text_model_profiles: textModelProfiles,
     api_key: activeTextProfile.api_key,
     base_url: activeTextProfile.base_url,
@@ -722,6 +746,7 @@ function normalizeConfig(config) {
     multimodal_enabled: activeTextProfile.multimodal_enabled,
     reasoning_effort: activeTextProfile.reasoning_effort,
     context_length_limit: activeTextProfile.context_length_limit,
+    output_token_limit: activeTextProfile.output_token_limit,
     concurrency_limit: activeTextProfile.concurrency_limit,
     temperature_enabled: activeTextProfile.temperature_enabled,
     temperature: activeTextProfile.temperature,
