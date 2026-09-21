@@ -346,10 +346,12 @@ async function runWithOperationTimeout(runner, timeoutMs = AI_REQUEST_TIMEOUT_MS
   }
 }
 
-function createHeaders(apiKey) {
+// 构造模型请求头，仅官方文本服务附带开源客户端标识。
+function createHeaders(apiKey, textModelProvider) {
   return {
     'Content-Type': 'application/json',
     Authorization: `Bearer ${apiKey}`,
+    ...(textModelProvider === 'official' ? { 'X-Yibiao-Client-Type': 'open-source' } : {}),
   };
 }
 
@@ -890,19 +892,22 @@ async function collectJsonResponseWithConfig(app, config, request) {
 // 按文本模型设置统一输出上限，覆盖 Agent SDK 自带的长度参数。
 function applyOutputTokenLimit(body, config) {
   delete body.max_output_tokens;
+  delete body.max_tokens;
   if (config.output_token_limit > 0) {
     body.max_completion_tokens = config.output_token_limit;
-    body.max_tokens = config.output_token_limit;
+    // 官方只接受新字段；其他服务商保留原有的双字段请求方式。
+    if (config.text_model_provider !== 'official') body.max_tokens = config.output_token_limit;
   } else {
     delete body.max_completion_tokens;
-    delete body.max_tokens;
   }
   return body;
 }
 
 // 构造普通、流式及 JSON 文本请求。
 function createChatRequestBody(config, request, options = {}) {
-  const modelName = JINLONG_DEPRECATED_MODEL_MAP[config.model_name] || config.model_name;
+  const modelName = config.text_model_provider === 'jinlong'
+    ? (JINLONG_DEPRECATED_MODEL_MAP[config.model_name] || config.model_name)
+    : config.model_name;
   const body = {
     model: modelName,
     messages: request.messages,
@@ -963,7 +968,7 @@ async function fetchChatCompletion(app, config, body, options = {}) {
   try {
     return await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
-      headers: createHeaders(config.api_key),
+      headers: createHeaders(config.api_key, config.text_model_provider),
       body: JSON.stringify(body),
       signal: options.signal || controller.signal,
     });
@@ -2626,7 +2631,7 @@ function createAiService({ app, configStore }) {
           try {
             response = await fetch(`${trimBaseUrl(config.base_url)}/models`, {
               method: 'GET',
-              headers: createHeaders(config.api_key),
+              headers: createHeaders(config.api_key, config.text_model_provider),
             });
           } catch (error) {
             throw markAiRequestError(error, { retryable: true });
@@ -2644,12 +2649,13 @@ function createAiService({ app, configStore }) {
         throw error;
       }
 
+      const models = Array.isArray(data.data) ? data.data.map((item) => item.id).filter(Boolean) : [];
       return {
         success: true,
         message: '模型列表已更新',
-        models: Array.isArray(data.data) 
-          ? data.data.map((item) => item.id).filter(Boolean).filter(id => !Object.keys(JINLONG_DEPRECATED_MODEL_MAP).includes(id))
-          : [],
+        models: config.text_model_provider === 'jinlong'
+          ? models.filter((id) => !Object.keys(JINLONG_DEPRECATED_MODEL_MAP).includes(id))
+          : models,
       };
     },
 
