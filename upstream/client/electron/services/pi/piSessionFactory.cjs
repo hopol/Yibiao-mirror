@@ -1,5 +1,6 @@
 const {
   createPiJsonValidationTool,
+  createPiJsonValidator,
 } = require('./piJsonValidationTool.cjs');
 const {
   createPiUserQuestionTool,
@@ -15,8 +16,15 @@ const {
 const {
   createPiRetryErrorNormalizer,
 } = require('./piRetryErrorNormalizer.cjs');
+const {
+  PI_NO_SUMMARY_INSTRUCTIONS,
+  withTaskCompletionParameter,
+  installTaskCompletionHook,
+} = require('./piSummaryControl.cjs');
 
+const { NATIVE_AGENT_TOOLS } = require('../agent/agentToolEnvironment.cjs');
 let piModulesPromise = null;
+const FIXED_TOOL_LIST_INSTRUCTIONS = '工具列表覆盖本任务的全部阶段。read、write、edit、bash、grep、find、ls 全程可用，优先按当前任务指导选择工具；业务工具仍按当前阶段使用。';
 
 // 延迟加载 ESM Pi SDK，供 CommonJS Electron Main 复用。
 function loadPiModules() {
@@ -41,7 +49,7 @@ function normalizeOutputLimit(contextLength) {
 }
 
 // 创建隔离的 Pi Session；持久任务可在后续完整执行中重新打开原 Session。
-async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environment, proxyInfo, config, timeoutMs, jsonValidationSchemas, requestUserQuestion, reportTaskFailure, openXmlTool }) {
+async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environment, proxyInfo, config, timeoutMs, jsonValidationSchemas, requestUserQuestion, reportTaskFailure, openXmlTool, createTools, activeTools, beforeToolCall, summaryEnabled = true, isFinalToolCall, fixedToolList = false, baseline }) {
   const { codingAgent, piAi, typebox } = await loadPiModules();
   const credentials = new piAi.InMemoryCredentialStore();
   const modelsStore = new piAi.InMemoryModelsStore();
@@ -74,6 +82,7 @@ async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environ
   await modelRuntime.setRuntimeApiKey('yibiao', proxyInfo.token);
   const model = modelRuntime.getModel('yibiao', 'default');
   if (!model) throw new Error('Pi Agent 模型注册失败');
+  const jsonValidator = createPiJsonValidator({ workspaceDir, validationSchemas: jsonValidationSchemas });
 
   const settingsManager = codingAgent.SettingsManager.inMemory({
     defaultProvider: 'yibiao',
@@ -102,7 +111,10 @@ async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environ
       agentsFiles: [{ path: '<yibiao-agent-workspace>', content: environment.instructions }],
     }),
     systemPromptOverride: () => undefined,
-    appendSystemPromptOverride: () => [],
+    appendSystemPromptOverride: () => [
+      ...(summaryEnabled === false ? [PI_NO_SUMMARY_INSTRUCTIONS] : []),
+      ...(fixedToolList ? [FIXED_TOOL_LIST_INSTRUCTIONS] : []),
+    ],
   });
   await resourceLoader.reload();
   const bashTool = codingAgent.createBashToolDefinition(workspaceDir, {
@@ -115,9 +127,8 @@ async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environ
     }),
   });
   const jsonValidationTool = codingAgent.defineTool(createPiJsonValidationTool({
-    workspaceDir,
     Type: typebox.Type,
-    validationSchemas: jsonValidationSchemas,
+    validator: jsonValidator,
   }));
   const userQuestionTool = codingAgent.defineTool(createPiUserQuestionTool({
     Type: typebox.Type,
@@ -139,18 +150,64 @@ async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environ
     : sessionsDir
       ? codingAgent.SessionManager.create(workspaceDir, sessionsDir)
       : codingAgent.SessionManager.inMemory(workspaceDir);
-  const { session } = await codingAgent.createAgentSession({
+  // 业务工具按调用注入，公共 Pi 层不依赖业务服务。
+  let session;
+  let requestedTools;
+  // 原生工具不随业务阶段收缩，自定义工具保持任务声明的权限。
+  const withNativeTools = names => [...new Set([...NATIVE_AGENT_TOOLS, ...names])];
+  // 恢复任务可在创建时设定权限；运行中切换使用 Pi 的工具列表接口。
+  // 固定工具清单时只更新阶段门禁，system prompt 与 tools 保持不变以复用请求前缀缓存。
+  const setActiveTools = toolNames => {
+    requestedTools = withNativeTools(toolNames);
+    if (!fixedToolList) session?.setActiveToolsByName(requestedTools);
+  };
+  const taskTools = (createTools?.({ Type: typebox.Type, workspaceDir, setActiveTools, baseline }) || []).map(tool => codingAgent.defineTool(tool));
+  let customTools = [bashTool, jsonValidationTool, userQuestionTool, taskFailureTool, ...(openXmlCustomTool ? [openXmlCustomTool] : []), ...taskTools];
+  if (summaryEnabled === false && !isFinalToolCall) {
+    customTools = [
+      codingAgent.createReadToolDefinition(workspaceDir, { autoResizeImages: false }),
+      codingAgent.createEditToolDefinition(workspaceDir),
+      codingAgent.createWriteToolDefinition(workspaceDir),
+      codingAgent.createFindToolDefinition(workspaceDir),
+      codingAgent.createLsToolDefinition(workspaceDir),
+      codingAgent.createGrepToolDefinition(workspaceDir),
+      ...customTools,
+    ].map(withTaskCompletionParameter);
+  }
+  const defaultTools = [...NATIVE_AGENT_TOOLS, 'json-validation', 'ask-user', AGENT_TASK_FAILURE_TOOL_NAME, ...(openXmlCustomTool ? [OPENXML_TOOL_NAME] : []), ...taskTools.map(tool => tool.name)];
+  const initialTools = withNativeTools(requestedTools || activeTools || defaultTools);
+  // SDK 的 tools 同时限定注册范围；先注册本任务全部工具，再按阶段启用。
+  ({ session } = await codingAgent.createAgentSession({
     cwd: workspaceDir,
     agentDir: environment.layout.agentDir,
     model,
     modelRuntime,
     thinkingLevel: 'off',
-    tools: ['read', 'bash', 'edit', 'write', 'find', 'ls', 'json-validation', 'ask-user', AGENT_TASK_FAILURE_TOOL_NAME, ...(openXmlCustomTool ? [OPENXML_TOOL_NAME] : [])],
-    customTools: [bashTool, jsonValidationTool, userQuestionTool, taskFailureTool, ...(openXmlCustomTool ? [openXmlCustomTool] : [])],
+    tools: [...new Set([...defaultTools, ...initialTools])],
+    customTools,
     resourceLoader,
     settingsManager,
     sessionManager,
-  });
+  }));
+  session.setActiveToolsByName(fixedToolList ? defaultTools : initialTools);
+  if (beforeToolCall) {
+    // 列表切换只影响下一轮；逐次执行前还须拦住当前轮已排定的禁用调用。
+    const previousBeforeToolCall = session.agent.beforeToolCall;
+    session.agent.beforeToolCall = async (context, signal) => {
+      await beforeToolCall(context, signal);
+      return previousBeforeToolCall?.(context, signal);
+    };
+  }
+  if (fixedToolList) {
+    // 阶段门禁最先执行，禁用工具不进入业务回调。
+    requestedTools = initialTools;
+    const previousBeforeToolCall = session.agent.beforeToolCall;
+    session.agent.beforeToolCall = async (context, signal) => {
+      if (!requestedTools.includes(context.toolCall.name)) throw new Error(`当前阶段不能调用 ${context.toolCall.name}，请只使用当前阶段说明的工具。`);
+      return previousBeforeToolCall?.(context, signal);
+    };
+  }
+  if (summaryEnabled === false) installTaskCompletionHook(session.agent, isFinalToolCall);
   return {
     session,
     sessionFile: session.sessionFile || sessionManager.getSessionFile() || '',
@@ -174,7 +231,8 @@ async function createPiSession({ workspaceDir, sessionsDir, sessionFile, environ
       skills: resourceLoader.getSkills().skills.map((item) => item.name),
       prompts: resourceLoader.getPrompts().prompts.map((item) => item.name),
       extensions: resourceLoader.getExtensions().extensions.map((item) => item.path),
-      active_tools: session.getActiveToolNames(),
+      active_tools: fixedToolList ? [...requestedTools] : session.getActiveToolNames(),
+      registered_tools: session.getActiveToolNames(),
     },
   };
 }

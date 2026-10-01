@@ -2,7 +2,7 @@ import * as Tooltip from '@radix-ui/react-tooltip';
 import { useEffect, useState, type ComponentType, type ReactElement, type SVGProps } from 'react';
 import { getAppMenuItems, getParentMenuItemBySection } from '../app/menuConfig';
 import type { AppMenuItem, SectionId } from '../shared/types/navigation';
-import { AppDialog, useToast } from '../shared/ui';
+import { AppDialog, useNoticeToast } from '../shared/ui';
 import logoUrl from '../../assets/icon_256.png';
 import groupChatQrUrl from '../../assets/group-chat-qr.png';
 
@@ -15,11 +15,10 @@ interface SidebarProps {
 const navigationIcons: Record<SectionId, ComponentType<SVGProps<SVGSVGElement>>> = {
   'bid-generation': BidGenerationIcon,
   'technical-plan': DocumentIcon,
-  'existing-plan-expansion': DocumentIcon,
   'feasibility-report': DocumentIcon,
-  'business-bid': BriefcaseIcon,
   'knowledge-base': ArchiveIcon,
   'document-knowledge-base': ArchiveIcon,
+  'credential-library': ArchiveIcon,
   'image-knowledge-base': ArchiveIcon,
   resources: ResourcesIcon,
   'bid-check': BidCheckIcon,
@@ -27,9 +26,6 @@ const navigationIcons: Record<SectionId, ComponentType<SVGProps<SVGSVGElement>>>
   'rejection-check': ShieldIcon,
   'ai-evaluation': BidCheckIcon,
   'template-settings': DocumentIcon,
-  'my-templates': DocumentIcon,
-  'new-template': DocumentIcon,
-  'export-format': DocumentIcon,
   'bid-opportunity': RadarIcon,
   'developer-test': FlaskIcon,
   'developer-json-test': FlaskIcon,
@@ -38,6 +34,7 @@ const navigationIcons: Record<SectionId, ComponentType<SVGProps<SVGSVGElement>>>
   'developer-parser-sandbox': FlaskIcon,
   'developer-export-preview': FlaskIcon,
   'developer-expansion-replace-test': FlaskIcon,
+  'developer-layout-budget-test': FlaskIcon,
   'developer-agent-test': FlaskIcon,
   'plugin-manager': PluginIcon,
   settings: GearIcon,
@@ -50,7 +47,7 @@ function Sidebar({ activeSection, developerMode, onSectionChange }: SidebarProps
   const [collapsed, setCollapsed] = useState(false);
   const [groupChatOpen, setGroupChatOpen] = useState(false);
   const [groupChatQrSource, setGroupChatQrSource] = useState(groupChatQrUrl);
-  const { showToast } = useToast();
+  const showNotice = useNoticeToast();
   const menuItems = getAppMenuItems(developerMode);
   const activeParent = getParentMenuItemBySection(activeSection, developerMode);
 
@@ -82,16 +79,7 @@ function Sidebar({ activeSection, developerMode, onSectionChange }: SidebarProps
       return;
     }
 
-    showToast(item.notice.message, 'info', {
-      duration: 7000,
-      actions: item.notice.externalUrl ? [
-        {
-          label: item.notice.actionLabel || '打开链接',
-          variant: 'primary',
-          onClick: () => openExternalUrl(item.notice?.externalUrl || ''),
-        },
-      ] : undefined,
-    });
+    showNotice(item.notice);
   };
 
   return (
@@ -156,8 +144,8 @@ function Sidebar({ activeSection, developerMode, onSectionChange }: SidebarProps
         open={groupChatOpen}
         onOpenChange={setGroupChatOpen}
         kicker="用户交流"
-        title="扫码加入交流群"
-        description="使用微信扫描下方二维码，加入易标用户交流群。"
+        title="开源软件没有客服！没有客服！！没有客服！！！"
+        description="欢迎AI、招投标相关从业者一起探讨技术～。"
         cardClassName="group-chat-dialog"
         actions={<button type="button" className="secondary-action" onClick={() => setGroupChatOpen(false)}>关闭</button>}
       >
@@ -269,17 +257,6 @@ function DocumentIcon(props: SVGProps<SVGSVGElement>) {
       <path d="M13.5 4v4.35h4.25" />
       <path d="M9.5 12.2h5" />
       <path d="M9.5 15.7h4" />
-    </svg>
-  );
-}
-
-function BriefcaseIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...props}>
-      <path d="M5 8h14v11.5H5z" />
-      <path d="M9 8V5.5h6V8" />
-      <path d="M5 12.5h14" />
-      <path d="M10.5 12.5v2h3v-2" />
     </svg>
   );
 }

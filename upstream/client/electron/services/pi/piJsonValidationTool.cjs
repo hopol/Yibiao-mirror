@@ -44,7 +44,7 @@ function createToolResult({ filePath, valid, stage, errors = [] }) {
     errors,
     message: valid
       ? 'JSON.parse 和 Ajv 校验均已通过。'
-      : '校验未通过，请根据 errors 修复文件后再次调用 json-validation。',
+      : '校验未通过，请根据 errors 修复文件后重新校验。',
   };
   return {
     content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
@@ -53,13 +53,76 @@ function createToolResult({ filePath, valid, stage, errors = [] }) {
   };
 }
 
-// 创建只负责 JSON 解析与 Schema 校验的 Pi 自定义工具。
-function createPiJsonValidationTool({ workspaceDir, Type, validationSchemas = {} }) {
+// 供 Agent 自查的校验器：预置 Schema 的文件只传路径，其余文件由调用方提供 Schema；结果由任务提交时统一把关。
+function createPiJsonValidator({ workspaceDir, validationSchemas = {} }) {
   const ajv = new Ajv({ allErrors: true, strict: true });
+
+  // Windows 下统一大小写匹配预置规则。
+  function fileKey(filePath) {
+    const resolvedPath = path.resolve(workspaceDir, String(filePath || ''));
+    return process.platform === 'win32' ? resolvedPath.toLowerCase() : resolvedPath;
+  }
+
   const presetSchemas = new Map(Object.entries(validationSchemas).map(([filePath, schema]) => [
-    normalizeWorkspaceFilePath(filePath),
+    fileKey(normalizeWorkspaceFilePath(filePath)),
     schema,
   ]));
+
+  function validateContent(filePath, source, suppliedSchema) {
+    const relativePath = path.relative(workspaceDir, path.resolve(workspaceDir, filePath)).split(path.sep).join('/');
+    let data;
+    try {
+      data = JSON.parse(source);
+    } catch (error) {
+      return createToolResult({
+        filePath: relativePath, valid: false, stage: 'parse',
+        errors: [{ message: error?.message || String(error) }],
+      });
+    }
+
+    let validate;
+    try {
+      const key = fileKey(filePath);
+      const schema = presetSchemas.has(key) ? presetSchemas.get(key) : suppliedSchema;
+      if (schema === undefined) throw new Error(`任务未为 ${relativePath} 预置 Schema，调用时必须提供 schema`);
+      validate = ajv.compile(schema);
+    } catch (error) {
+      return createToolResult({
+        filePath: relativePath, valid: false, stage: 'schema',
+        errors: [{ message: error?.message || String(error) }],
+      });
+    }
+
+    return createToolResult(validate(data)
+      ? { filePath: relativePath, valid: true, stage: 'success' }
+      : { filePath: relativePath, valid: false, stage: 'validation', errors: normalizeAjvErrors(validate.errors) });
+  }
+
+  // 独立检查已有文件，保留其相对路径约束和读取失败反馈。
+  function validateFile(filePath, schema) {
+    let source;
+    let relativePath;
+    try {
+      const resolved = resolveWorkspaceFile(workspaceDir, filePath);
+      relativePath = resolved.relativePath;
+      source = fs.readFileSync(resolved.resolvedPath, 'utf8');
+    } catch (error) {
+      return createToolResult({
+        filePath, valid: false, stage: 'read', errors: [{ message: error?.message || String(error) }],
+      });
+    }
+    return validateContent(relativePath, source, schema);
+  }
+
+  return {
+    hasPreset: (filePath) => presetSchemas.has(fileKey(filePath)),
+    validateContent,
+    validateFile,
+  };
+}
+
+// 创建独立校验工具，继续支持只检查已有文件和调用方提供的 Schema。
+function createPiJsonValidationTool({ Type, validator }) {
   return {
     name: JSON_VALIDATION_TOOL_NAME,
     label: 'JSON 校验',
@@ -77,72 +140,12 @@ function createPiJsonValidationTool({ workspaceDir, Type, validationSchemas = {}
         description: '仅在任务没有为目标文件预置 Schema 时提供，根据当前任务输出要求构造 JSON Schema Draft-07。',
       })),
     }, { additionalProperties: false }),
-    execute: async (_toolCallId, params) => {
-      let source;
-      let relativePath;
-      try {
-        const resolved = resolveWorkspaceFile(workspaceDir, params.file_path);
-        relativePath = resolved.relativePath;
-        const resolvedPath = resolved.resolvedPath;
-        source = fs.readFileSync(resolvedPath, 'utf-8');
-      } catch (error) {
-        return createToolResult({
-          filePath: params.file_path,
-          valid: false,
-          stage: 'read',
-          errors: [{ message: error?.message || String(error) }],
-        });
-      }
-
-      let data;
-      try {
-        data = JSON.parse(source);
-      } catch (error) {
-        return createToolResult({
-          filePath: params.file_path,
-          valid: false,
-          stage: 'parse',
-          errors: [{ message: error?.message || String(error) }],
-        });
-      }
-
-      let validate;
-      try {
-        const schema = presetSchemas.has(relativePath)
-          ? presetSchemas.get(relativePath)
-          : params.schema;
-        if (schema === undefined) {
-          throw new Error(`任务未为 ${relativePath} 预置 Schema，调用时必须提供 schema`);
-        }
-        validate = ajv.compile(schema);
-      } catch (error) {
-        return createToolResult({
-          filePath: params.file_path,
-          valid: false,
-          stage: 'schema',
-          errors: [{ message: error?.message || String(error) }],
-        });
-      }
-
-      if (!validate(data)) {
-        return createToolResult({
-          filePath: params.file_path,
-          valid: false,
-          stage: 'validation',
-          errors: normalizeAjvErrors(validate.errors),
-        });
-      }
-
-      return createToolResult({
-        filePath: params.file_path,
-        valid: true,
-        stage: 'success',
-      });
-    },
+    execute: async (_toolCallId, params) => validator.validateFile(params.file_path, params.schema),
   };
 }
 
 module.exports = {
   JSON_VALIDATION_TOOL_NAME,
+  createPiJsonValidator,
   createPiJsonValidationTool,
 };
