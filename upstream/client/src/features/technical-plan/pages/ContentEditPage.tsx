@@ -13,6 +13,7 @@ import type { ExportFormatConfig } from '../../../shared/types/exportFormat';
 import { DEFAULT_EXPORT_FORMAT } from '../../../shared/types/exportFormat';
 import { buildExportFormatCssVars } from '../../../shared/utils/exportFormatCss';
 import { formatOutlineTitle } from '../../../shared/utils/outlineNumbering';
+import { getDefaultImageLayoutShares, type ImageLayoutKey } from '../../../../electron/shared/imageLayout/index.mjs';
 
 interface ContentEditPageProps {
   stepNumber: string;
@@ -26,6 +27,7 @@ interface ContentEditPageProps {
   exportTemplateId: string;
   sections: ContentGenerationSections;
   onOpenGenerationSettingsAppearance: () => void;
+  onContentGenerationOptionsChange: (options: ContentGenerationOptions) => Promise<void>;
   onContentGenerationReset: () => Promise<void>;
   onContentSaved: (item: OutlineItem, content: string) => Promise<void> | void;
 }
@@ -39,6 +41,18 @@ interface OutlineNodeMeta {
 }
 
 type ContentGenerationAction = 'start' | 'continue' | 'regenerate' | 'regenerate_section';
+
+// 布局开关只上报当前配图比例档位可用的布局，档位份额为 0 的布局不计入统计。
+function buildImageLayoutUsage(options: ContentGenerationOptions) {
+  const defaultShares = getDefaultImageLayoutShares(options.imageQuantity);
+  const usage = (key: ImageLayoutKey, enabled: boolean) => (defaultShares[key] > 0 ? enabled : undefined);
+  return {
+    image_layout_single: usage('single', options.useSingleImageLayout),
+    image_layout_image_text: usage('imageText', options.useImageTextLayout),
+    image_layout_three_images: usage('threeImages', options.useThreeImagesLayout),
+    image_layout_four_images: usage('fourImages', options.useFourImagesLayout),
+  };
+}
 
 const statusLabels: Record<TreeStatus, string> = {
   idle: '待生成',
@@ -166,7 +180,6 @@ const MarkdownContent = memo(function MarkdownContent({ content, onPreviewImage 
     <MarkdownRenderer
       imageMode="preview"
       imageClassName="markdown-clickable-image"
-      renderMermaid
       onPreviewImage={onPreviewImage}
     >
       {content}
@@ -186,6 +199,7 @@ function ContentEditPage({
   exportTemplateId,
   sections,
   onOpenGenerationSettingsAppearance,
+  onContentGenerationOptionsChange,
   onContentGenerationReset,
   onContentSaved,
 }: ContentEditPageProps) {
@@ -210,6 +224,7 @@ function ContentEditPage({
   const [sectionSubmitting, setSectionSubmitting] = useState(false);
   const [templateRequiredDialogOpen, setTemplateRequiredDialogOpen] = useState(false);
   const [concurrencyWarning, setConcurrencyWarning] = useState('');
+  const [aiImageUnavailableTarget, setAiImageUnavailableTarget] = useState<'generation' | 'section' | null>(null);
   const [generationSubmitting, setGenerationSubmitting] = useState(false);
   const generationStarting = useRef(false);
   const [exportFormat, setExportFormat] = useState<ExportFormatConfig>(DEFAULT_EXPORT_FORMAT);
@@ -580,6 +595,8 @@ function ContentEditPage({
       table_requirement: savedGenerationOptions.tableRequirement,
       use_mermaid_images: savedGenerationOptions.useMermaidImages,
       use_ai_images: savedGenerationOptions.useAiImages,
+      image_quantity: savedGenerationOptions.imageQuantity,
+      ...buildImageLayoutUsage(savedGenerationOptions),
       content_generation_action: contentGenerationAction,
       enable_consistency_audit: true,
       consistency_repair_mode: 'agent',
@@ -588,8 +605,26 @@ function ContentEditPage({
     showToast(regenerate ? '正文重新生成任务已在后台启动' : '正文生成任务已在后台启动', 'success');
   };
 
+  // AI 生图开启但生图模型不可用时先弹窗提醒；用户继续后直接关闭本项目 AI 生图，编排阶段不再安排 AI 图片。
+  const resolveAiImageOptions = async (
+    options: ContentGenerationOptions,
+    imageModelAvailable: boolean,
+    target: 'generation' | 'section',
+    disableAiImages: boolean,
+  ) => {
+    if (options.imageQuantity <= 0 || !options.useAiImages) return options;
+    if (disableAiImages) {
+      const nextOptions = { ...options, useAiImages: false };
+      await onContentGenerationOptionsChange(nextOptions);
+      return nextOptions;
+    }
+    if (imageModelAvailable) return options;
+    setAiImageUnavailableTarget(target);
+    return null;
+  };
+
   // 启动前提醒当前模型并发偏低；用户确认后仍使用最新配置，重复点击不重复提交。
-  const startGeneration = async (confirmedConcurrency = false) => {
+  const startGeneration = async (confirmedConcurrency = false, disableAiImages = false) => {
     if (generationStarting.current || taskBlocksGeneration || (concurrencyWarning && !confirmedConcurrency)) return;
     if (!outlineData?.outline?.length) {
       showToast('请先生成目录', 'info');
@@ -608,7 +643,13 @@ function ContentEditPage({
       }
       const nextImageModelStatus = config?.image_model?.status || 'untested';
       const nextImageModelAvailable = nextImageModelStatus === 'available';
-      const savedGenerationOptions = normalizeContentGenerationOptions(contentGenerationOptions, nextImageModelAvailable);
+      const savedGenerationOptions = await resolveAiImageOptions(
+        normalizeContentGenerationOptions(contentGenerationOptions, nextImageModelAvailable),
+        nextImageModelAvailable,
+        'generation',
+        disableAiImages,
+      );
+      if (!savedGenerationOptions) return;
       const regenerate = leaves.length > 0 && completedCount === leaves.length;
       const contentGenerationAction: ContentGenerationAction = regenerate
           ? 'regenerate'
@@ -624,7 +665,7 @@ function ContentEditPage({
     }
   };
 
-  const startSectionRegeneration = async () => {
+  const startSectionRegeneration = async (disableAiImages = false) => {
     if (taskBlocksGeneration || !outlineData?.outline?.length || !requirementItem) {
       return;
     }
@@ -634,7 +675,13 @@ function ContentEditPage({
       const config = await window.yibiao?.config.load();
       const nextImageModelStatus = config?.image_model?.status || 'untested';
       const nextImageModelAvailable = nextImageModelStatus === 'available';
-      const savedGenerationOptions = normalizeContentGenerationOptions(contentGenerationOptions, nextImageModelAvailable);
+      const savedGenerationOptions = await resolveAiImageOptions(
+        normalizeContentGenerationOptions(contentGenerationOptions, nextImageModelAvailable),
+        nextImageModelAvailable,
+        'section',
+        disableAiImages,
+      );
+      if (!savedGenerationOptions) return;
       await window.yibiao?.tasks.startContentGeneration({
         regenerate: true,
         targetItemId: requirementItem.id,
@@ -958,6 +1005,30 @@ function ContentEditPage({
       />
 
       <AppDialog
+        open={Boolean(aiImageUnavailableTarget)}
+        onOpenChange={(open) => { if (!open) setAiImageUnavailableTarget(null); }}
+        title="AI 生图不可用"
+        description="您启用了AI生图，但检测结果显示不可用。继续生成将关闭本项目的AI生图，改用其他已开启的图片类型，是否继续"
+        actions={(
+          <>
+            <button type="button" className="secondary-action" onClick={() => setAiImageUnavailableTarget(null)}>取消</button>
+            <button
+              type="button"
+              className="primary-action"
+              disabled={generationSubmitting || sectionSubmitting}
+              onClick={() => {
+                const target = aiImageUnavailableTarget;
+                setAiImageUnavailableTarget(null);
+                void (target === 'section' ? startSectionRegeneration(true) : startGeneration(true, true));
+              }}
+            >
+              继续
+            </button>
+          </>
+        )}
+      />
+
+      <AppDialog
         open={templateRequiredDialogOpen}
         onOpenChange={setTemplateRequiredDialogOpen}
         kicker="正文生成"
@@ -1026,7 +1097,7 @@ function ContentEditPage({
             />
             <div className="content-regenerate-actions">
               <Dialog.Close className="secondary-action" type="button">取消</Dialog.Close>
-              <button type="button" className="primary-action" onClick={startSectionRegeneration} disabled={taskBlocksGeneration}>开始重新生成</button>
+              <button type="button" className="primary-action" onClick={() => void startSectionRegeneration()} disabled={taskBlocksGeneration}>开始重新生成</button>
             </div>
           </Dialog.Content>
         </Dialog.Portal>
