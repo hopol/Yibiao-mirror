@@ -20,6 +20,11 @@ const bridge = {
   requiredOnlineServices: {
     getStatus: () => ipcRenderer.invoke('required-online-services:get-status'),
   },
+  notice: {
+    syncCurrent: (request) => ipcRenderer.invoke('notice:sync-current', request),
+    prepareMedia: (request) => ipcRenderer.invoke('notice:prepare-media', request),
+    releaseMedia: (leaseId) => ipcRenderer.invoke('notice:release-media', leaseId),
+  },
   donation: {
     getConfig: () => ipcRenderer.invoke('donation:get-config'),
     createTip: (request) => ipcRenderer.invoke('donation:create-tip', request),
@@ -92,6 +97,7 @@ const bridge = {
   },
   officialAccount: {
     redeemCode: (input) => invokeOfficialAccount('redeem-code', input),
+    getInvoiceApplication: (orderNo) => invokeOfficialAccount('get-invoice-application', orderNo),
     createInvoiceApplication: (input) => invokeOfficialAccount('create-invoice-application', input),
     getInvoiceInfo: () => ipcRenderer.invoke('official-account:get-invoice-info'),
     saveInvoiceInfo: (input) => ipcRenderer.invoke('official-account:save-invoice-info', input),
@@ -99,12 +105,12 @@ const bridge = {
     refreshBalance: () => invokeOfficialAccount('refresh-balance'),
     getRechargeOptions: () => invokeOfficialAccount('get-recharge-options'),
     createRechargeOrder: (input) => invokeOfficialAccount('create-recharge-order', input),
-    getRechargeOrders: () => invokeOfficialAccount('get-recharge-orders'),
-    getTransactions: (page) => invokeOfficialAccount('get-transactions', page),
-    getRechargeOrder: (id) => invokeOfficialAccount('get-recharge-order', id),
-    closeRechargeOrder: (id) => invokeOfficialAccount('close-recharge-order', id),
+    getRechargeOrders: (input) => invokeOfficialAccount('get-recharge-orders', input),
+    getTransactions: (input) => invokeOfficialAccount('get-transactions', input),
+    getRechargeOrder: (orderNo) => invokeOfficialAccount('get-recharge-order', orderNo),
+    closeRechargeOrder: (orderNo) => invokeOfficialAccount('close-recharge-order', orderNo),
     onRechargeOrderChanged: (callback) => {
-      const listener = (_event, order) => callback(order);
+      const listener = (_event, order, created) => callback(order, created);
       ipcRenderer.on('official-account:order', listener);
       return () => ipcRenderer.removeListener('official-account:order', listener);
     },
@@ -249,6 +255,7 @@ const bridge = {
     readTenderMarkdown: () => ipcRenderer.invoke('technical-plan:read-tender-markdown'),
     readContentWord: (sectionId) => ipcRenderer.invoke('technical-plan:read-content-word', sectionId),
     previewContentWord: (sectionId) => ipcRenderer.invoke('technical-plan:preview-content-word', sectionId),
+    previewBusinessChapterWord: (nodeId) => ipcRenderer.invoke('technical-plan:preview-business-chapter-word', nodeId),
     readTenderSourceMarkdown: (sourceId) => ipcRenderer.invoke('technical-plan:read-tender-source-markdown', sourceId),
     updateStep: (step) => ipcRenderer.invoke('technical-plan:update-step', step),
     saveBidAnalysisConfig: (payload) => ipcRenderer.invoke('technical-plan:save-bid-analysis-config', payload),
@@ -256,10 +263,12 @@ const bridge = {
     saveOutline: (outlineData) => ipcRenderer.invoke('technical-plan:save-outline', outlineData),
     saveGlobalFacts: (globalFacts) => ipcRenderer.invoke('technical-plan:save-global-facts', globalFacts),
     saveContentGenerationOptions: (options) => ipcRenderer.invoke('technical-plan:save-content-generation-options', options),
-    saveChapterContent: (payload) => ipcRenderer.invoke('technical-plan:save-chapter-content', payload),
     resetContentGeneration: () => ipcRenderer.invoke('technical-plan:reset-content-generation'),
     clear: () => ipcRenderer.invoke('technical-plan:clear'),
+    inspectBidTemplate: () => ipcRenderer.invoke('technical-plan:inspect-bid-template'),
     openBidTemplate: () => ipcRenderer.invoke('technical-plan:open-bid-template'),
+    getBusinessFillReview: () => ipcRenderer.invoke('technical-plan:get-business-fill-review'),
+    saveBusinessFillReview: (payload) => ipcRenderer.invoke('technical-plan:save-business-fill-review', payload),
   },
   feasibilityReport: {
     loadState: () => ipcRenderer.invoke('feasibility-report:load-state'),
@@ -326,6 +335,10 @@ const bridge = {
     startBidAnalysis: (payload) => ipcRenderer.invoke('tasks:start-bid-analysis', payload),
     startOutlineGeneration: (payload) => ipcRenderer.invoke('tasks:start-outline-generation', payload),
     suppressOutlineSelectionAutoConfirmation: (payload) => ipcRenderer.invoke('tasks:suppress-outline-selection-auto-confirmation', payload),
+    confirmBusinessFillReview: (payload) => ipcRenderer.invoke('tasks:confirm-business-fill-review', payload),
+    suppressBusinessFillReviewAutoConfirmation: (payload) => ipcRenderer.invoke('tasks:suppress-business-fill-review-auto-confirmation', payload),
+    startBidTemplateExtraction: () => ipcRenderer.invoke('tasks:start-bid-template-extraction'),
+    startRulePageCompile: () => ipcRenderer.invoke('tasks:start-rule-page-compile'),
     startGlobalFactsGeneration: (payload) => ipcRenderer.invoke('tasks:start-global-facts-generation', payload),
     startContentGeneration: (payload) => ipcRenderer.invoke('tasks:start-content-generation', payload),
     pauseContentGeneration: () => ipcRenderer.invoke('tasks:pause-content-generation'),

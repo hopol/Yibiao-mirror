@@ -1,15 +1,16 @@
 import type { AiHttpErrorPayload, ChatCompletionRequest, JsonCompletionRequest } from './ai';
-import type { OfficialTransactionsPage, OfficialInvoiceApplicationInput, OfficialInvoiceInfo, OfficialAccountState, OfficialEmailCredentials, OfficialEmailPurpose, OfficialRechargeOption, OfficialRechargeOrder } from './officialAccount';
+import type { OfficialConsumeRecord, OfficialInvoiceApplication, OfficialInvoiceApplicationInput, OfficialInvoiceInfo, OfficialAccountState, OfficialEmailCredentials, OfficialEmailPurpose, OfficialPage, OfficialPageQuery, OfficialRechargeOption, OfficialRechargeOrder } from './officialAccount';
 import type { DuplicateCheckWorkspacePatch, DuplicateCheckWorkspaceState, FileSelectionResult } from './bid';
 import type { ClientConfig, ConfigSaveResult, ImageModelTestResult, ModelInfoResult, ModelListResult, UpdateChannel } from './config';
 import type { KnowledgeAnalysisSnapshot, KnowledgeBaseEvent, KnowledgeBaseIndex, KnowledgeBaseIndexMutationResult, KnowledgeBaseMutationResult, KnowledgeBaseSearchRequest, KnowledgeBaseSearchPage, KnowledgeBaseRetryDocumentResult, KnowledgeBaseStartMatchingResult, KnowledgeBaseUploadResult, KnowledgeDocument, KnowledgeFolder, KnowledgeItem } from '../../features/knowledge-base/types';
 import type { RejectionCheckWorkspacePatch, RejectionCheckWorkspaceState, RejectionDocumentRole } from '../../features/rejection-check/types';
 import type { BlindCheckCredentialWord, BlindCheckPreset, BlindCheckProfile, BlindCheckTenderSources, BlindCheckWorkspacePatch, BlindCheckWorkspaceState } from '../../features/blind-check/types';
-import type { BidAnalysisMode, BidAnalysisTaskState, BidSectionMode, ContentGenerationOptions, ContentGenerationPlanState, ContentGenerationProgressDetail, ContentGenerationRuntimeState, ContentGenerationSectionState, DetectedBidSection, GlobalFactGroupState, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanGenerationConfig, TechnicalPlanState, TechnicalPlanStep } from '../../features/technical-plan/types';
+import type { BidAnalysisMode, BidAnalysisTaskState, BidSectionMode, BidTemplateInspection, BusinessFillReview, BusinessFillReviewSubmission, ContentGenerationOptions, ContentGenerationPlanState, ContentGenerationProgressDetail, ContentGenerationRuntimeState, ContentGenerationSectionState, DetectedBidSection, GlobalFactGroupState, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanGenerationConfig, TechnicalPlanState, TechnicalPlanStep } from '../../features/technical-plan/types';
 import type { FeasibilityProjectInfo, FeasibilityReportState, FeasibilityReportStep, FeasibilitySaveOutlineRequest, FeasibilitySourceFile } from '../../features/feasibility-report/types';
 import type { CredentialCertificate, CredentialEmployee, CredentialImageFieldKey, CredentialLibraryImportResult, CredentialLibraryMutationResult, CredentialLibraryProfile, CredentialLibrarySnapshot, CredentialOtherMaterial, CredentialProject, CredentialRecordSavePayload } from '../../features/credential-library/types';
 import type { ExportFormatConfig, ExportTemplateRecord } from './exportFormat';
 import type { TechnicalPlanOutlineData as OutlineData } from './outline';
+import type { NoticeCachedMedia, NoticeMediaCacheRequest } from './notice';
 
 /** 配置保存只更新提交字段，文本服务商档案也支持局部更新。 */
 export type ClientConfigPatch = Partial<Omit<ClientConfig, 'text_model_profiles'>> & {
@@ -616,6 +617,11 @@ export interface YibiaoBridge {
   requiredOnlineServices: {
     getStatus: () => Promise<RequiredOnlineServicesStatus>;
   };
+  notice: {
+    syncCurrent: (request: { projectName: string; noticeId: string | null }) => Promise<void>;
+    prepareMedia: (request: NoticeMediaCacheRequest) => Promise<NoticeCachedMedia>;
+    releaseMedia: (leaseId: string) => Promise<void>;
+  };
   donation: {
     getConfig: () => Promise<DonationPaymentConfig>;
     createTip: (request: DonationCreateRequest) => Promise<DonationIntent>;
@@ -659,19 +665,20 @@ export interface YibiaoBridge {
     activateOfflineCode: (code: string) => Promise<LicenseOfflineActivationResult>;
   };
   officialAccount: {
-    redeemCode: (input: { code: string; requestNo: string }) => Promise<{ redeemedPoint: string }>;
+    redeemCode: (input: { code: string }) => Promise<{ redeemedPoint: string }>;
+    getInvoiceApplication: (orderNo: string) => Promise<OfficialInvoiceApplication | null>;
     createInvoiceApplication: (input: OfficialInvoiceApplicationInput) => Promise<void>;
     getInvoiceInfo: () => Promise<OfficialInvoiceInfo>;
     saveInvoiceInfo: (input: OfficialInvoiceInfo) => Promise<void>;
     getState: () => Promise<OfficialAccountState>;
     refreshBalance: () => Promise<OfficialAccountState>;
     getRechargeOptions: () => Promise<OfficialRechargeOption[]>;
-    createRechargeOrder: (input: { optionId: string }) => Promise<OfficialRechargeOrder>;
-    getRechargeOrders: () => Promise<OfficialRechargeOrder[]>;
-    getTransactions: (page: number) => Promise<OfficialTransactionsPage>;
-    getRechargeOrder: (id: string) => Promise<OfficialRechargeOrder>;
-    closeRechargeOrder: (id: string) => Promise<OfficialRechargeOrder>;
-    onRechargeOrderChanged: (callback: (order: OfficialRechargeOrder) => void) => () => void;
+    createRechargeOrder: (input: { productId: string }) => Promise<OfficialRechargeOrder>;
+    getRechargeOrders: (input: OfficialPageQuery) => Promise<OfficialPage<OfficialRechargeOrder>>;
+    getTransactions: (input: OfficialPageQuery) => Promise<OfficialPage<OfficialConsumeRecord>>;
+    getRechargeOrder: (orderNo: string) => Promise<OfficialRechargeOrder>;
+    closeRechargeOrder: (orderNo: string) => Promise<OfficialRechargeOrder>;
+    onRechargeOrderChanged: (callback: (order: OfficialRechargeOrder, created: boolean) => void) => () => void;
     onStateChanged: (callback: (state: OfficialAccountState) => void) => () => void;
     sendEmailCode: (input: { email: string; purpose: OfficialEmailPurpose }) => Promise<boolean>;
     loginWithEmail: (input: OfficialEmailCredentials) => Promise<OfficialAccountState>;
@@ -793,6 +800,7 @@ export interface YibiaoBridge {
     readTenderMarkdown: () => Promise<string>;
     readContentWord: (sectionId: string) => Promise<Uint8Array | null>;
     previewContentWord: (sectionId: string) => Promise<Uint8Array | null>;
+    previewBusinessChapterWord: (nodeId: string) => Promise<Uint8Array | null>;
     readTenderSourceMarkdown: (sourceId: string) => Promise<string>;
     updateStep: (step: TechnicalPlanStep) => Promise<void>;
     saveBidAnalysisConfig: (payload: { mode: BidAnalysisMode; selectedTaskIds: string[]; bidSectionMode?: BidSectionMode }) => Promise<void>;
@@ -800,10 +808,12 @@ export interface YibiaoBridge {
     saveOutline: (payload: SaveOutlineRequest) => Promise<Partial<TechnicalPlanState>>;
     saveGlobalFacts: (globalFacts: GlobalFactGroupState[]) => Promise<Partial<TechnicalPlanState>>;
     saveContentGenerationOptions: (options: ContentGenerationOptions) => Promise<Partial<TechnicalPlanState>>;
-    saveChapterContent: (payload: { nodeId: string; content: string }) => Promise<Partial<TechnicalPlanState>>;
     resetContentGeneration: () => Promise<TechnicalPlanState>;
     clear: () => Promise<{ success: boolean; message?: string }>;
+    inspectBidTemplate: () => Promise<BidTemplateInspection>;
     openBidTemplate: () => Promise<{ success: boolean; message?: string }>;
+    getBusinessFillReview: () => Promise<BusinessFillReview>;
+    saveBusinessFillReview: (payload: BusinessFillReviewSubmission) => Promise<Partial<TechnicalPlanState>>;
   };
   feasibilityReport: {
     loadState: () => Promise<FeasibilityReportState>;
@@ -874,6 +884,10 @@ export interface YibiaoBridge {
     startBidAnalysis: (payload: unknown) => Promise<unknown>;
     startOutlineGeneration: (payload: unknown) => Promise<unknown>;
     suppressOutlineSelectionAutoConfirmation: (payload: { taskId: string }) => Promise<{ success: boolean }>;
+    confirmBusinessFillReview: (payload: { taskId: string } & BusinessFillReviewSubmission) => Promise<{ success: boolean }>;
+    suppressBusinessFillReviewAutoConfirmation: (payload: { taskId: string }) => Promise<{ success: boolean }>;
+    startBidTemplateExtraction: () => Promise<unknown>;
+    startRulePageCompile: () => Promise<unknown>;
     startGlobalFactsGeneration: (payload: unknown) => Promise<unknown>;
     startContentGeneration: (payload: unknown) => Promise<unknown>;
     pauseContentGeneration: () => Promise<unknown>;

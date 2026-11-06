@@ -12,6 +12,8 @@ const { registerExportIpc } = require('./exportIpc.cjs');
 const { registerFileIpc } = require('./fileIpc.cjs');
 const { registerKnowledgeBaseIpc } = require('./knowledgeBaseIpc.cjs');
 const { registerLicenseIpc } = require('./licenseIpc.cjs');
+const { registerNoticeIpc } = require('./noticeIpc.cjs');
+const { createNoticeMediaCacheService } = require('../services/noticeMediaCacheService.cjs');
 const { registerOfficialAccountIpc, registerOfficialInvoiceIpc } = require('./officialAccountIpc.cjs');
 const { registerRejectionCheckIpc } = require('./rejectionCheckIpc.cjs');
 const { registerStorageIpc } = require('./storageIpc.cjs');
@@ -153,6 +155,7 @@ const workspaceDatabaseChannels = [
   'technical-plan:read-tender-markdown',
   'technical-plan:read-content-word',
   'technical-plan:preview-content-word',
+  'technical-plan:preview-business-chapter-word',
   'technical-plan:read-tender-source-markdown',
   'technical-plan:update-step',
   'technical-plan:save-bid-analysis-config',
@@ -160,10 +163,12 @@ const workspaceDatabaseChannels = [
   'technical-plan:save-outline',
   'technical-plan:save-global-facts',
   'technical-plan:save-content-generation-options',
-  'technical-plan:save-chapter-content',
   'technical-plan:reset-content-generation',
   'technical-plan:clear',
+  'technical-plan:inspect-bid-template',
   'technical-plan:open-bid-template',
+  'technical-plan:get-business-fill-review',
+  'technical-plan:save-business-fill-review',
   'feasibility-report:load-state',
   'feasibility-report:import-source-documents',
   'feasibility-report:remove-source-document',
@@ -223,6 +228,10 @@ const workspaceDatabaseChannels = [
   'tasks:start-outline-generation',
   'tasks:confirm-outline-selection',
   'tasks:suppress-outline-selection-auto-confirmation',
+  'tasks:confirm-business-fill-review',
+  'tasks:suppress-business-fill-review-auto-confirmation',
+  'tasks:start-bid-template-extraction',
+  'tasks:start-rule-page-compile',
   'tasks:start-global-facts-generation',
   'tasks:start-content-generation',
   'tasks:pause-content-generation',
@@ -333,7 +342,7 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
     duplicateCheckStore,
     blindCheckStore,
   });
-  const taskService = createTaskService({ templateStore, aiService, agentService, autoConfirmationService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, blindCheckStore, feasibilityReportStore, knowledgeBaseService, duplicateCheckService, openXmlHelperService });
+  const taskService = createTaskService({ templateStore, aiService, agentService, autoConfirmationService, technicalPlanStore, rejectionCheckStore, duplicateCheckStore, blindCheckStore, feasibilityReportStore, knowledgeBaseService, duplicateCheckService, openXmlHelperService, credentialLibraryService });
   const agentWorkspaceService = createAgentWorkspaceService({ agentService, taskService, technicalPlanStore, feasibilityReportStore });
   agentWorkspaceServiceRef = agentWorkspaceService;
   technicalPlanStore.setAgentWorkspaceChangeListener(() => agentWorkspaceService.emitWorkspacesChanged());
@@ -373,16 +382,18 @@ function registerWorkspaceDatabaseServices({ app, configStore, aiService, agentS
     console.error('[plugin-service] 启用插件失败:', error);
   });
   
-  return { sqliteDatabase, technicalPlanExport: createTechnicalPlanExport({ technicalPlanStore, templateStore, agentService, openXmlHelperService,
+  return { sqliteDatabase, technicalPlanExport: createTechnicalPlanExport({ technicalPlanStore, templateStore, agentService, openXmlHelperService, credentialLibraryService,
     startContentGeneration: payload => taskService.startContentGeneration(payload),
   }) };
 }
 
+// 装配应用服务与 IPC；公告缓存独立于工作区数据库生命周期。
 function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerUpdateDownload, isUpdateCacheInUse, quitAndInstall, getLatestVersion, getUpdateDownloadUrl, gpuStartupState = {}, gpuTrialArg = '--yibiao-trial-hardware-acceleration', forceDisableGpuArgs = [], openDeveloperTokenStatsWindow, closeDeveloperTokenStatsWindow, openDeveloperAgentMonitorWindow, closeDeveloperAgentMonitorWindow }) {
   void checkRequiredOnlineServices();
   const configStore = createConfigStore(app);
   initLocalImageRenderService({ configStore });
   const licenseService = createLicenseService({ app, configStore });
+  const noticeMediaCacheService = createNoticeMediaCacheService({ app });
   const officialAccountService = createOfficialAccountService({ app, configStore, powerMonitor });
   const aiService = createAiService({ app, configStore });
   const developerExpansionReplaceTestService = createDeveloperExpansionReplaceTestService({ aiService });
@@ -403,7 +414,9 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   let workspaceDatabaseStarted = false;
   let gpuTrialRelaunchStarted = false;
 
+  // 关闭所有后台服务，并等待公告下载的临时文件清理完成。
   const closeServices = async () => {
+    await noticeMediaCacheService.close();
     await officialAccountService.close();
     donationService.close?.();
     await agentService.close?.();
@@ -493,6 +506,7 @@ function registerIpcHandlers({ app, mainWindow, checkAndDownloadUpdate, triggerU
   });
   registerDonationIpc({ donationService });
   registerLicenseIpc({ licenseService });
+  registerNoticeIpc({ noticeMediaCacheService });
   registerOfficialAccountIpc({ officialAccountService });
   void officialAccountService.start().catch(() => undefined);
   registerAiIpc({ aiService });
