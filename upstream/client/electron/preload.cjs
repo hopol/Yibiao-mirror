@@ -215,7 +215,7 @@ const bridge = {
     deleteFolder: (folderId) => ipcRenderer.invoke('knowledge-base:delete-folder', folderId),
     deleteDocument: (documentId) => ipcRenderer.invoke('knowledge-base:delete-document', documentId),
     moveDocument: (documentId, targetFolderId, targetDocumentId, position) => ipcRenderer.invoke('knowledge-base:move-document', documentId, targetFolderId, targetDocumentId, position),
-    uploadDocuments: (folderId) => ipcRenderer.invoke('knowledge-base:upload-documents', folderId),
+    uploadDocuments: (folderId, filePaths) => ipcRenderer.invoke('knowledge-base:upload-documents', folderId, filePaths),
     retryDocument: (documentId) => ipcRenderer.invoke('knowledge-base:retry-document', documentId),
     startMatching: (documentId, batchSize) => ipcRenderer.invoke('knowledge-base:start-matching', documentId, batchSize), // batchSize 已忽略
     readMarkdown: (documentId) => ipcRenderer.invoke('knowledge-base:read-markdown', documentId),
@@ -388,6 +388,35 @@ const bridge = {
     refreshMarket: () => ipcRenderer.invoke('plugins:refreshMarket'),
     clearUpdateFailedState: (pluginId) => ipcRenderer.invoke('plugins:clearUpdateFailedState', pluginId),
     notifyEvent: (pluginId, event, payload) => ipcRenderer.invoke('plugins:notify-event', pluginId, event, payload),
+  },
+  dependencies: {
+    getStatus: (dependencyId) => ipcRenderer.invoke('dependencies:get-status', dependencyId),
+    install: (dependencyId) => ipcRenderer.invoke('dependencies:install', dependencyId),
+    uninstall: (dependencyId) => ipcRenderer.invoke('dependencies:uninstall', dependencyId),
+    onProgress: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on('dependencies:progress', listener);
+      return () => ipcRenderer.removeListener('dependencies:progress', listener);
+    },
+  },
+  dualLayerPdf: {
+    getState: () => ipcRenderer.invoke('dual-layer-pdf:get-state'),
+    getEnvironment: () => ipcRenderer.invoke('dual-layer-pdf:get-environment'),
+    selectFiles: () => ipcRenderer.invoke('dual-layer-pdf:select-files'),
+    addFiles: (filePaths) => ipcRenderer.invoke('dual-layer-pdf:add-files', filePaths),
+    removeItem: (itemId) => ipcRenderer.invoke('dual-layer-pdf:remove-item', itemId),
+    retryItem: (itemId) => ipcRenderer.invoke('dual-layer-pdf:retry-item', itemId),
+    selectOutputDir: () => ipcRenderer.invoke('dual-layer-pdf:select-output-dir'),
+    resetOutputDir: () => ipcRenderer.invoke('dual-layer-pdf:reset-output-dir'),
+    start: () => ipcRenderer.invoke('dual-layer-pdf:start'),
+    cancel: () => ipcRenderer.invoke('dual-layer-pdf:cancel'),
+    clear: () => ipcRenderer.invoke('dual-layer-pdf:clear'),
+    showInFolder: (filePath) => ipcRenderer.invoke('dual-layer-pdf:show-in-folder', filePath),
+    onEvent: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on('dual-layer-pdf:event', listener);
+      return () => ipcRenderer.removeListener('dual-layer-pdf:event', listener);
+    },
   },
 };
 

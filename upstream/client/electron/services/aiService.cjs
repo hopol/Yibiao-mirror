@@ -276,7 +276,8 @@ function createOpenAICompatibleImageRequestBody(provider, imageConfig, prompt, r
       model,
       prompt,
       size,
-      response_format: 'url',
+      response_format: provider === 'jinlong' ? 'b64_json' : 'url',
+      ...(provider === 'volcengine' ? { watermark: imageConfig?.image_watermark !== false } : {}),
       ...(requestMode === 'stream' ? { stream: true } : {}),
     };
   }
