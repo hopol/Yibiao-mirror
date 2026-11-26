@@ -9,12 +9,10 @@ import { useOfficialAccount } from './useOfficialAccount';
 
 interface OfficialAccountControlsProps {
   onViewOrders: () => void;
-  rechargeRequested?: boolean;
-  onRechargeRequestHandled?: () => void;
 }
 
 // 展示官方账户及余额，并共用邮箱验证码弹窗完成登陆和绑定。
-export default function OfficialAccountControls({ onViewOrders, rechargeRequested, onRechargeRequestHandled }: OfficialAccountControlsProps) {
+export default function OfficialAccountControls({ onViewOrders }: OfficialAccountControlsProps) {
   const account = useOfficialAccount();
   const [purpose, setPurpose] = useState<OfficialEmailPurpose | null>(null);
   const [email, setEmail] = useState('');
@@ -24,6 +22,7 @@ export default function OfficialAccountControls({ onViewOrders, rechargeRequeste
   const [remainingSeconds, setRemainingSeconds] = useState(0);
   const [rechargeOpen, setRechargeOpen] = useState(false);
   const [refreshingBalance, setRefreshingBalance] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
   const balanceRefreshPending = useRef(false);
   const rechargeAfterLogin = useRef(false);
   const rechargeButton = useRef<HTMLButtonElement>(null);
@@ -92,13 +91,6 @@ export default function OfficialAccountControls({ onViewOrders, rechargeRequeste
     }
   };
 
-  // 余额不足跳转到此处时，等账户状态就绪后复用充值入口；未登录会先走邮箱登陆。
-  useEffect(() => {
-    if (!rechargeRequested || account.status === 'loading') return;
-    onRechargeRequestHandled?.();
-    openRecharge();
-  }, [rechargeRequested, account.status]);
-
   // 卸载商品弹窗使其请求结果失效，并恢复充值按钮焦点。
   const closeRecharge = () => {
     setRechargeOpen(false);
@@ -143,13 +135,36 @@ export default function OfficialAccountControls({ onViewOrders, rechargeRequeste
     }
   };
 
+  // 退出后由账户订阅更新界面，不保存设置草稿。
+  const logout = async () => {
+    setLoggingOut(true);
+    try {
+      await window.yibiao.officialAccount.logout();
+      setEmail('');
+      setResendAt(0);
+      setRemainingSeconds(0);
+      showToast('已退出登录', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '退出登录失败', 'error');
+    } finally {
+      setLoggingOut(false);
+    }
+  };
+
+  const emailSignedIn = account.status === 'signed-in' && account.identityType === 'email';
+
   return (
     <>
       <div className="settings-row">
         <div className="settings-row-copy"><strong>账号</strong></div>
         <div className="official-api-account-row" ref={accountRow} tabIndex={-1}>
-          <span className="official-api-account">{account.status === 'signed-in' && account.identityType === 'email' ? account.email : account.clientId || '—'}</span>
-          {!(account.status === 'signed-in' && account.identityType === 'email') && (
+          <span className="official-api-account">{emailSignedIn ? account.email : account.clientId || '—'}</span>
+          {emailSignedIn ? (
+            <button type="button" className="inline-action" disabled={loggingOut} onClick={() => { void logout(); }}>
+              {loggingOut && <InlineSpinner />}
+              退出登录
+            </button>
+          ) : (
             <button
               type="button"
               className="inline-action"

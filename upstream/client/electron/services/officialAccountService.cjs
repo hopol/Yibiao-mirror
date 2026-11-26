@@ -2,8 +2,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { getOfficialApiSessionFilePath, getOfficialRechargeQrCachePath } = require('../utils/paths.cjs');
 const { fetchWithRedirect } = require('../utils/fetchWithRedirect.cjs');
+const { resolveOfficialApiEndpoints } = require('./officialApiEndpoints.cjs');
 
-const SERVICE_BASE_URL = 'https://v3.yibiao.pro/qhp-yibiao';
 const OPEN_PATH = '/anonymous/yibiao/open';
 const RECHARGE_PATH = '/anonymous/yibiao/recharge';
 const API_KEY_NAME = '易标开源版';
@@ -60,6 +60,7 @@ function toOrderView(order, qrCode = null) {
 
 // 管理官方账户会话；所有身份变更在 Main 中串行执行，令牌不发送给页面。
 function createOfficialAccountService({ app, configStore, powerMonitor, fetchImpl = fetch }) {
+  const { accountBaseUrl } = resolveOfficialApiEndpoints(app);
   const sessionFile = getOfficialApiSessionFilePath(app);
   const qrCacheFile = getOfficialRechargeQrCachePath(app);
   const listeners = new Set();
@@ -152,22 +153,25 @@ function createOfficialAccountService({ app, configStore, powerMonitor, fetchImp
     qrCleanupTimer.unref?.();
   }
 
-  // 失效会话停止刷新，并静默回到未登录状态。
-  function clearSession(message = '') {
+  // 主动退出保留无凭据标记，自动失效只删除已有会话。
+  function clearSession(message = '', { signedOut = false } = {}) {
+    if (signedOut) writeJsonAtomic(sessionFile, { kind: 'signed-out' });
+    else if (session) fs.rmSync(sessionFile, { force: true });
     resetOrderTracking();
     clearTimeout(refreshTimer);
     refreshTimer = null;
     refreshAt = 0;
     session = null;
     sessionError = message;
+    if (signedOut) apiKeyError = '';
     loading = false;
     publish();
-    fs.rmSync(sessionFile, { force: true });
   }
 
   // 会话失效：邮箱身份回到未登录；匿名身份标记过期，并立即用 clientId 重新登录。
   function expireSession() {
-    if (session?.kind !== 'anonymous') {
+    if (!session) return;
+    if (session.kind !== 'anonymous') {
       clearSession('登录已失效，请重新登录官方账户');
       return;
     }
@@ -199,7 +203,7 @@ function createOfficialAccountService({ app, configStore, powerMonitor, fetchImp
     let response;
     try {
       // 服务端以 307 跳转到实际入口，需保留鉴权头。
-      response = await fetchWithRedirect(`${SERVICE_BASE_URL}${endpoint}`, {
+      response = await fetchWithRedirect(`${accountBaseUrl}${endpoint}`, {
         method,
         headers,
         ...(rawBody ? { body: rawBody } : body ? { body: JSON.stringify(body) } : {}),
@@ -315,7 +319,7 @@ function createOfficialAccountService({ app, configStore, powerMonitor, fetchImp
     try {
       if (!session || session.expiresAt <= Date.now()) {
         if (session?.kind === 'anonymous') await loginAnonymous();
-        else clearSession('登录已失效，请重新登录官方账户');
+        else expireSession();
         return;
       }
       if (session.kind === 'email') acceptEmailLogin(await request('/openUser/refresh-token', { method: 'GET', authenticated: true }));
@@ -375,7 +379,13 @@ function createOfficialAccountService({ app, configStore, powerMonitor, fetchImp
       try {
         clientId = configStore.load().analytics_client_id;
         publish();
-        if (fs.existsSync(sessionFile)) session = JSON.parse(fs.readFileSync(sessionFile, 'utf-8'));
+        const savedSession = fs.existsSync(sessionFile) ? JSON.parse(fs.readFileSync(sessionFile, 'utf-8')) : null;
+        if (savedSession?.kind === 'signed-out') {
+          loading = false;
+          publish();
+          return;
+        }
+        session = savedSession;
         if (session?.kind === 'email') {
           if (await refreshSession()) await syncApiKey();
           return;
@@ -407,6 +417,14 @@ function createOfficialAccountService({ app, configStore, powerMonitor, fetchImp
         await syncApiKey();
       }
       return getState();
+    });
+  }
+
+  // 清除本机官方 Key 和会话，不修改服务端账户。
+  function logout() {
+    return enqueue(() => {
+      configStore.save({ text_model_profiles: { official: { api_key: '' } } });
+      clearSession('', { signedOut: true });
     });
   }
 
@@ -688,7 +706,7 @@ function createOfficialAccountService({ app, configStore, powerMonitor, fetchImp
     return tail;
   }
 
-  return { start, getState, onChanged, sendEmailCode, loginWithEmail, bindEmail, refreshBalance, getRechargeOptions,
+  return { start, getState, onChanged, sendEmailCode, loginWithEmail, logout, bindEmail, refreshBalance, getRechargeOptions,
     redeemCode, getInvoiceApplication, createInvoiceApplication, createRechargeOrder, getRechargeOrders, getTransactions,
     getRechargeOrder, closeRechargeOrder, onRechargeOrderChanged, close };
 }
